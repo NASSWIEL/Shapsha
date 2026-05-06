@@ -1,0 +1,51 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+    # ANTLR-generated parser code
+    "**/*Lexer.py",
+    "**/*Parser.py",
+    "**/*Listener.py",
+    "**/*Visitor.py",
+    "**/grammars_*/**",
+    # Protobuf / gRPC generated stubs
+    "**/*_pb2.py",
+    "**/*_pb2_grpc.py",
+    # Database migrations (Django, Alembic)
+    "**/migrations/**",
+    "**/alembic/versions/**",
+    # Common build / vendored locations
+    "build/**",
+    "dist/**",
+    "**/vendor/**",
+    "**/_generated/**",
+]
+
+[tool.ruff.lint]
+select = [
+    "E", "F",
+    "B",
+    "S",
+    "N",
+    "C90",
+    "PL",
+    "W",
+    "D",
+    "I",
+    "UP",
+]
+ignore = [
+    "D203",
+    "D213",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "D"]
+"__init__.py" = ["F401"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
