@@ -77,6 +77,14 @@ summary critical=N high=N low=N medium=N
 !R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run ruff format <files> --force-exclude 2>/dev/null
 ```
 
+**Stage what we changed.** Ruff/format may have rewritten files. Re-stage only files we actually touched — `git diff --name-only` against the post-fix tree gives the list of currently-modified tracked files; intersect with `<files>` to avoid grabbing unrelated user edits:
+
+```
+!for f in <files>; do git diff --quiet -- "$f" 2>/dev/null || git add -- "$f"; done
+```
+
+(Skip files that are unchanged after auto-fix — `git diff --quiet` returns 0 = no change, so we only `git add` the modified ones.)
+
 ### Branch on Critical/High presence
 
 - **No Critical or High** → output exactly:
@@ -113,6 +121,12 @@ If user picks `a` or `s`, invoke the `style-fixer` agent via Task. Pass JSON:
 Wait for the agent's single-line return: `fixed=N skipped=M files=<list>`.
 
 If `mode=diff`, ask user `[apply / cancel]` (AskUserQuestion). On `apply`, re-invoke agent with `mode=apply`.
+
+After a successful `mode=apply` (fixed > 0), stage the agent's edits so preflight (and any follow-up commit) sees them:
+
+```
+!for f in <files from agent return>; do git add -- "$f"; done
+```
 
 ## Output
 

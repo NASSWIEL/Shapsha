@@ -104,6 +104,14 @@ Forward only FIXABLE findings; never forward BLOCKED ones (the agent has its own
 
 Wait for agent's line: `fixed=N reported=M refused=K`.
 
+After a successful `mode=apply` (fixed > 0), stage the agent's edits so preflight and follow-up commits see them:
+
+```
+!for f in <distinct paths from forwarded findings>; do git diff --quiet -- "$f" 2>/dev/null || git add -- "$f"; done
+```
+
+(Use `git diff --quiet` per file to skip ones the agent reported-only on.)
+
 ## Output
 
 Single line, no preamble:

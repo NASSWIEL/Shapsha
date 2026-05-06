@@ -84,6 +84,10 @@ AskUserQuestion with three options:
 If user picks `a` (or `apply` after `s`), for each patch:
 
 - Use `Edit` to apply the unified diff. If a hunk does not apply cleanly, output `Patch failed for <file>:` followed by the patch text, and continue to the next file (do not abort all).
+- After all successful patches, stage them so preflight and follow-up commits see them:
+  ```
+  !for f in <successfully patched files>; do git add -- "$f"; done
+  ```
 
 ### Skip handling
 

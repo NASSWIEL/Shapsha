@@ -132,6 +132,12 @@ AskUserQuestion (three options):
 
 If user picks `a`, use `Edit` to apply the unified diff. If the patch fails to apply, output `Patch failed for README.md.` followed by patch text, exit non-zero.
 
+After a successful apply, stage README.md so preflight and follow-up commits see it:
+
+```
+!git add -- README.md
+```
+
 ## Output
 
 Single line, no preamble:

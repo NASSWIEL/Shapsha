@@ -11,13 +11,17 @@ Runner: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || 
 Repo state: !`git status --porcelain=v1`
 Branch: !`git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "<not-a-repo>"`
 Default branch: !`gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "main"`
+gh present: !`command -v gh >/dev/null 2>&1 && echo "yes" || echo "no"`
 GH auth: !`gh auth status 2>&1 | head -1`
+GH auth ok: !`gh auth status >/dev/null 2>&1 && echo "yes" || echo "no"`
 Has staged: !`git diff --cached --quiet 2>/dev/null && echo "no" || echo "yes"`
 Has unstaged: !`git diff --quiet 2>/dev/null && echo "no" || echo "yes"`
 
 ## Operating mode
 
 **Sequential, halt-on-failure.** Each step either passes silently or halts with a one-line reason. Sub-skills run their own interactive prompts; their non-zero exits halt preflight.
+
+**Stage handoff between steps.** Each sub-skill `git add`s the files IT modifies on success (style fixes, applied security fixes, generated tests, applied doc patches, README patch). The user's original staged changes carry through, plus all preflight-generated work. By step 7 the staged tree reflects everything that should be in the commit. Preflight itself does not call `git add` — that responsibility lives in each sub-skill so the same staging happens whether the skill is invoked standalone or via preflight.
 
 **Runner**: `R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv);` then `$R run <tool>`. Dispatches to `uv run` or `poetry run` as set by `/bt-ai:proj-init`.
 
@@ -28,6 +32,9 @@ Has unstaged: !`git diff --quiet 2>/dev/null && echo "no" || echo "yes"`
 1. If branch shows `<not-a-repo>` → output `Halted at guard: not a git repository.` exit non-zero.
 2. If `Has staged` is `no` AND `Has unstaged` is `no` → output `Halted at guard: no changes to validate.` exit non-zero.
 3. If `Has unstaged` is `yes` AND `Has staged` is `no` → stage user changes? No — refuse and instruct: output `Halted at guard: changes are unstaged. Stage them first (git add).` exit non-zero. (Reason: preflight should not silently `git add` user changes; user controls staging.)
+4. **gh prerequisite check** — preflight ends at step 8 with `gh pr create`. Failing later wastes 5 minutes:
+   - If `gh present` is `no` → output `Halted at guard: gh CLI not installed. Preflight ends with PR creation. Install gh (https://cli.github.com) and run 'gh auth login'. For a local-only flow, run individual skills: /bt-ai:check-style, /bt-ai:security, /bt-ai:gen-tests, /bt-ai:doc-sync, /bt-ai:readme-sync, /bt-ai:commit.` exit non-zero.
+   - If `gh present` is `yes` AND `GH auth ok` is `no` → output `Halted at guard: gh not authenticated. Run 'gh auth login' and retry.` exit non-zero.
 
 ### Step 1 — check-style
 
@@ -73,8 +80,7 @@ If non-zero → output `Halted at step 6: README out of sync.` exit non-zero.
 
 ### Step 7 — commit message gate
 
-1. Stage what is currently unstaged in tracked files:
-   - We are NOT calling `git add` here — preflight requires staged content from the start (see Guard step 3). At this step, all changes the user wants in the commit are already staged.
+1. The staged tree at this point holds: (a) everything the user staged before invoking preflight, plus (b) all auto-fixes / generated tests / doc patches / README patch produced by steps 1-6 (each sub-skill staged its own outputs). Preflight does NOT call `git add` here — anything still unstaged at this point is intentionally outside the commit (e.g., the user has unrelated WIP).
 2. Compose a Conventional Commit message (English) from the staged diff:
 
    ```
@@ -122,7 +128,7 @@ No preamble. No "Step 1 starting..." narration between steps.
 - Step 1-6 user picks `[n]` (skip) on a sub-skill prompt → that skill exits non-zero → preflight halts at that step. This is correct: declining means changes are unresolved.
 - `.git/COMMIT_EDITMSG` already exists (stale from prior run) → we overwrite at step 7; commit-push-pr clears it after consumption.
 - Step 4 pytest collection passes but tests fail → halt at step 4 with full failure tail.
-- gh not authenticated → halt at step 8 with `gh auth required` from commit-push-pr.
+- gh missing or unauthenticated → caught at guard step 4, never reaches step 8.
 - User on default branch → step 8 (commit-push-pr) creates a `<type>/<slug>` branch automatically.
 - All steps pass but user has nothing committed (impossible given guards) → fail-safe error at step 8.
 - Step 7 user provides empty corrected message → treat as second failure and halt.

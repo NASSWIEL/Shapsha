@@ -39,10 +39,14 @@ Pytest version: !`R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/
 
 ### Discover targets
 
-Pipe the resolved list into the bundled discovery tool:
+Pipe the resolved list into the bundled discovery tool. **Targeted mode passes `--no-skip-filter`** — when the user explicitly named files, respect that intent and skip the FastAPI/Streamlit/CLI heuristics. Diff and `all` modes keep the filter on (the user did not pick those files individually).
 
 ```
+# diff mode / all mode: filter on
 !printf '%s\n' <files> | python "${CLAUDE_PLUGIN_ROOT}/tools/discover_test_targets.py"
+
+# targeted mode (one or more explicit paths in $ARGUMENTS): filter off
+!printf '%s\n' <files> | python "${CLAUDE_PLUGIN_ROOT}/tools/discover_test_targets.py" --no-skip-filter
 ```
 
 The tool returns JSON:
@@ -100,6 +104,12 @@ Wait for agent's line: `files=<list> tests_added=<n> collection_ok=<true|false>`
 
 If `collection_ok=false` → output `Test collection failed.` followed by the agent's verbatim error. Exit non-zero. Do not run the verify phase.
 
+**Stage the new/modified test files** so preflight and follow-up commits see them:
+
+```
+!for f in <files from agent return>; do git add -- "$f"; done
+```
+
 ### Verify (run + classify failures)
 
 Run pytest on the freshly written/modified test paths and pipe through the bundled failure parser:
@@ -139,6 +149,12 @@ Auto-delegate to `test-fixer` agent with the mechanical list. Cap retries at 3 �
 
 Wait for agent's line: `repaired=<n> still_failing=<n> files=<list>`.
 
+**Re-stage** the test-fixer's edits before re-running pytest, so the staged tree always reflects the latest passing state:
+
+```
+!for f in <files from agent return>; do git add -- "$f"; done
+```
+
 After agent returns, re-run pytest + parser. Repeat up to 3 times. Each iteration must reduce `failed + errors`; if not, break and treat the rest as semantic.
 
 #### If semantic failures remain after the auto-fix loop
@@ -149,9 +165,9 @@ Use `AskUserQuestion` (single prompt, three options):
 - `regen` — Re-run `test-writer` on the still-failing symbols only (passing the failure context as a hint).
 - `discard` — Delete the test functions that still fail. (Whole files only if every test in the file fails.)
 
-On `regen`: re-invoke `test-writer` with payload extended by `previous_failures` for the affected symbols, then re-verify (one more iteration of the loop).
+On `regen`: re-invoke `test-writer` with payload extended by `previous_failures` for the affected symbols, then re-verify (one more iteration of the loop). After the regen loop settles, re-stage modified files: `!for f in <files>; do git add -- "$f"; done`.
 
-On `discard`: delete only the failing `test_*` functions from the affected files (leave passing siblings intact). If a file ends up with zero tests, delete the file too.
+On `discard`: delete only the failing `test_*` functions from the affected files (leave passing siblings intact). If a file ends up with zero tests, delete the file too. Stage the deletions/edits: `!for f in <files>; do git add -- "$f"; done` (a deleted file becomes a staged deletion; an edited file becomes a staged edit).
 
 ## Output
 

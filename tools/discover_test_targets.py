@@ -30,6 +30,11 @@ Usage:
     git diff --name-only ... | python discover_test_targets.py
     echo -e "src/foo.py\\nsrc/bar.py" | python discover_test_targets.py
 
+    # Targeted mode (user explicitly named these files): bypass the
+    # framework-skip filter so handlers / pages / CLI entrypoints still
+    # get tests generated.
+    echo "src/handlers.py" | python discover_test_targets.py --no-skip-filter
+
 Output: JSON on stdout, line-prefixed errors on stderr.
 
 The output schema matches the test-writer agent's input contract:
@@ -59,8 +64,18 @@ from pathlib import Path
 
 try:
     import tomllib  # type: ignore[import]
+
+    HAS_TOML = True
 except ImportError:  # Python < 3.11
-    import tomli as tomllib  # type: ignore[import]
+    try:
+        import tomli as tomllib  # type: ignore[import]
+
+        HAS_TOML = True
+    except ImportError:
+        # Discovery still works without TOML — package_name() simply returns None
+        # and the test-writer falls back to path-based imports.
+        tomllib = None  # type: ignore[assignment]
+        HAS_TOML = False
 
 ROUTE_DECORATORS = {"get", "post", "put", "delete", "patch", "route", "head", "options"}
 CLI_DECORATORS = {"command"}
@@ -230,6 +245,8 @@ def discover_import_root(repo: Path) -> str | None:
 
 
 def package_name(repo: Path) -> str | None:
+    if not HAS_TOML:
+        return None
     pp = repo / "pyproject.toml"
     if not pp.is_file():
         return None
@@ -243,6 +260,7 @@ def package_name(repo: Path) -> str | None:
 
 
 def main() -> int:
+    skip_filter = "--no-skip-filter" not in sys.argv[1:]
     repo = Path.cwd()
     raw = sys.stdin.read().strip()
     if not raw:
@@ -280,10 +298,11 @@ def main() -> int:
             skipped.append({"source_path": src_path, "reason": f"syntax-error: {e}"})
             continue
 
-        skip = detect_skip_reason(tree, source)
-        if skip:
-            skipped.append({"source_path": src_path, "reason": skip})
-            continue
+        if skip_filter:
+            skip = detect_skip_reason(tree, source)
+            if skip:
+                skipped.append({"source_path": src_path, "reason": skip})
+                continue
 
         symbols = public_symbols(tree)
         if not symbols:

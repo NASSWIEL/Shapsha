@@ -144,16 +144,19 @@ Suite séquentielle pré-PR. Voir [Logique du preflight](#logique-du-preflight).
 **Garde initiale** :
 - Pas de repo git → halt.
 - Aucun changement (ni staged ni unstaged) → halt.
-- Changements unstaged uniquement → halt (l'utilisateur contrôle le staging, preflight ne fait pas `git add` à sa place).
+- Changements unstaged uniquement → halt (l'utilisateur contrôle le staging initial, preflight ne stage pas les changements originaux à sa place).
+- `gh` absent ou non authentifié → halt avant tout travail (preflight termine par `gh pr create` à l'étape 8 ; échouer tôt évite de gâcher 5 minutes de checks). Pour un flux local sans PR, utiliser les skills individuels (`/bt-ai:check-style`, `/bt-ai:commit`, etc.).
+
+**Stage handoff** : chaque sous-skill `git add` ses propres outputs après application réussie (fixes de style, tests générés, patches docs/README). Au moment du commit (étape 7), le tree staged contient les changements originaux **plus** tout le travail auto-généré par preflight. Les skills standalone (hors preflight) appliquent le même handoff, donc `git status` reste cohérent.
 
 **Étapes** :
 
-1. **check-style** — halt si Critical/High non résolus.
-2. **security** — halt si BLOCKED restant.
-3. **gen-tests (diff mode)** — halt si génération ou pytest verify échouent durablement ; "tous déjà testés" est un pass.
+1. **check-style** — halt si Critical/High non résolus. Les fichiers fixés sont stagés.
+2. **security** — halt si BLOCKED restant. Les fichiers fixés sont stagés.
+3. **gen-tests (diff mode)** — halt si génération ou pytest verify échouent durablement ; "tous déjà testés" est un pass. Les nouveaux tests sont stagés.
 4. **pytest** — `$R run pytest -q` ; halt si non-zéro avec les 30 dernières lignes.
-5. **doc-sync** — halt si l'utilisateur refuse les patches ou si l'application échoue.
-6. **readme-sync** — halt si README désynchronisé non corrigé.
+5. **doc-sync** — halt si l'utilisateur refuse les patches ou si l'application échoue. Les docs patchés sont stagés.
+6. **readme-sync** — halt si README désynchronisé non corrigé. README stagé si patché.
 7. **commit message gate** — compose un Conventional Commit depuis `git diff --cached`, valide via `gitlint --staged --msg-stdin`. Une réécriture est possible ; deux échecs → halt. Le message validé est écrit dans `.git/COMMIT_EDITMSG`.
 8. **commit-push-pr** — consomme `.git/COMMIT_EDITMSG` via `git commit -F`, push, ouvre la PR. La sortie standard est l'URL de la PR.
 
