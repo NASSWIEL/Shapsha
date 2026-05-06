@@ -7,57 +7,75 @@ allowed-tools: Bash, Read, Glob
 
 # /bt-ai:check-style
 
-Runner: !`python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('bt-ai',{}).get('runner','uv'))" 2>/dev/null || echo uv`
+Argument: $ARGUMENTS
+Runner: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv`
 Changed Python files: !`{ git diff --name-only --diff-filter=ACMR -- '*.py' 2>/dev/null; git diff --cached --name-only --diff-filter=ACMR -- '*.py' 2>/dev/null; git ls-files --others --exclude-standard -- '*.py' 2>/dev/null; } | sort -u | tr '\n' ' '`
-Ruff version: !`R=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('bt-ai',{}).get('runner','uv'))" 2>/dev/null || echo uv); $R run ruff --version 2>&1 | head -1 || echo "ruff: NOT INSTALLED"`
+All Python files (only used if $ARGUMENTS == "all"): !`git ls-files -- '*.py' 2>/dev/null | tr '\n' ' '`
+Ruff version: !`R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv); $R run ruff --version 2>&1 | head -1 || echo "ruff: NOT INSTALLED"`
+
+## Argument
+
+| Argument | Behavior |
+|---|---|
+| (none)  | Lint changed files only (default — recommended for incremental work) |
+| `all`   | Lint **every** tracked `.py` file in the repo (slow on large repos; surfaces pre-existing debt) |
+| anything else | Output `Unknown argument: <token>. Accepts no argument or 'all'.` and exit non-zero |
 
 ## Operating mode
 
 **Silent.** No narration ("Now I will run ruff..."). Run ruff via `!`, parse JSON output, classify findings, emit only the final summary line and any AskUserQuestion required.
 
-**Runner**: every shell call that runs a Python tool resolves the runner with the prefix `R=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('bt-ai',{}).get('runner','uv'))" 2>/dev/null || echo uv);` then invokes `$R run <tool>`. This dispatches to `uv run` or `poetry run` as configured by `/bt-ai:proj-init`.
+**Hermetic — never write into the user's repo.** All helper logic lives in `${CLAUDE_PLUGIN_ROOT}/tools/`. Do not write `classify_*.py`, scratch JSON, log files, or any file that is not the actual user fix. The user's git status must show only intended edits.
+
+**Runner**: `R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv);` then `$R run <tool>`. Dispatches to `uv run` or `poetry run`.
 
 ## Logic
 
 ### Pre-flight
 
-1. If the changed-files line above is empty → output `No changed .py files.` and stop with exit 0.
-2. If `ruff: NOT INSTALLED` appears → output `ruff not installed. Run /bt-ai:proj-init.` and stop with non-zero status. Do not attempt to install.
-3. If not in a git repository → output `Not a git repository.` and stop with non-zero status.
+1. If `$ARGUMENTS` is non-empty AND not exactly `all` → output `Unknown argument: <token>. Accepts no argument or 'all'.` exit non-zero.
+2. Decide the target list:
+   - `$ARGUMENTS == "all"` → use the `All Python files` line.
+   - else → use `Changed Python files`.
+3. If the target list is empty → output `No .py files to lint.` exit 0.
+4. If `ruff: NOT INSTALLED` → output `ruff not installed. Run /bt-ai:proj-init.` exit non-zero.
+5. If not in a git repo (only required for the changed-files path) → output `Not a git repository.` exit non-zero.
 
-### Lint
+### Lint + classify
 
-Run:
+Run ruff and pipe its JSON straight into the bundled classifier — no temp files:
 
 ```
-!$R run ruff check <files> --force-exclude --output-format=json --no-fix 2>/dev/null
+!R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run ruff check <files> --force-exclude --output-format=json --no-fix 2>/dev/null | python "${CLAUDE_PLUGIN_ROOT}/tools/classify_ruff.py"
 ```
 
-`--force-exclude` is required so that `[tool.ruff].extend-exclude` (set by `proj-init`) applies even when files are passed explicitly on the command line — without it ruff would lint generated files (`*Lexer.py`, `*_pb2.py`, migrations, etc.) that the project has explicitly opted out of style checks.
+`--force-exclude` is required so `[tool.ruff].extend-exclude` (set by `proj-init`) applies even when files are passed explicitly — without it ruff lints generated files (`*Lexer.py`, `*_pb2.py`, migrations) the project has opted out of style checks.
 
-Parse the JSON array. Each entry has `code`, `filename`, `location.row`, `message`.
+The classifier emits:
 
-### Severity grouping
+```
+summary critical=N high=N low=N medium=N
+[CRITICAL] <path>:<line> <code> <message>
+[HIGH]     <path>:<line> <code> <message>
+```
 
-Map each `code` to a bucket using its prefix:
+(Medium hidden by design; Low not printed because it's auto-fixed below.)
+
+### Severity table (classifier authoritative)
 
 | Bucket | Prefixes | Action |
 |---|---|---|
 | **Critical** | `F`, `E9` | print + halt fix mode |
-| **High** | `B`, `S` | print + ask user |
-| **Low (auto-fix)** | `W`, `D`, `I`, `UP` | silent fix |
+| **High**     | `B`, `S` | print + ask user |
+| **Low (auto-fix)** | `E` (non-`E9`), `W`, `D`, `I`, `UP` | silent fix |
 | **Medium (hidden)** | `N`, `C` (incl. `C90`), `PL` | never printed, never fixed |
-
-`E1`-`E8` (non-`E9`) are pycodestyle warnings → treat as Low.
 
 ### Silent auto-fix Low
 
 ```
-!$R run ruff check <files> --force-exclude --fix --select=E,W,D,I,UP --silent 2>/dev/null
-!$R run ruff format <files> --force-exclude 2>/dev/null
+!R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run ruff check <files> --force-exclude --fix --select=E,W,D,I,UP --silent 2>/dev/null
+!R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run ruff format <files> --force-exclude 2>/dev/null
 ```
-
-Track the count of low-severity fixes applied (re-run with `--statistics` if needed for the count, parsing only the total).
 
 ### Branch on Critical/High presence
 
@@ -65,32 +83,21 @@ Track the count of low-severity fixes applied (re-run with `--statistics` if nee
   ```
   Fixed N low-severity issues. No critical/high findings.
   ```
-  Replace `N` with the count. Stop with exit 0.
+  Replace `N` with the count from `--statistics` (re-run if needed). Stop with exit 0.
 
-- **Critical or High present** → continue to print and ask.
-
-### Print findings
-
-For each Critical and High finding (Medium hidden, Low already fixed), print one line:
-
-```
-[CRITICAL] <path>:<line> <code> <message>
-[HIGH]     <path>:<line> <code> <message>
-```
-
-Group by severity, Critical first. Truncate `message` at 80 chars.
+- **Critical or High present** → continue. The classifier already printed the per-finding lines; do not re-print.
 
 ### Ask user
 
-Use AskUserQuestion exactly once with three options:
+Use AskUserQuestion exactly once, three options:
 
 - `a` — Auto-fix what can be safely fixed (delegates to `style-fixer` agent)
-- `s` — Show diffs first (delegates to `style-fixer` agent in dry-run, then re-asks `apply` / `cancel`)
+- `s` — Show diffs first (delegates `style-fixer` in dry-run, then re-asks `apply` / `cancel`)
 - `n` — Skip; leave findings unfixed
 
 ### Delegate to style-fixer
 
-If user picks `a` or `s`, invoke the `style-fixer` agent via Task. Pass JSON payload:
+If user picks `a` or `s`, invoke the `style-fixer` agent via Task. Pass JSON:
 
 ```json
 {
@@ -105,7 +112,7 @@ If user picks `a` or `s`, invoke the `style-fixer` agent via Task. Pass JSON pay
 
 Wait for the agent's single-line return: `fixed=N skipped=M files=<list>`.
 
-If `mode=diff`, then ask user `[apply / cancel]` (AskUserQuestion). On `apply`, re-invoke agent with `mode=apply`.
+If `mode=diff`, ask user `[apply / cancel]` (AskUserQuestion). On `apply`, re-invoke agent with `mode=apply`.
 
 ## Output
 
@@ -121,9 +128,9 @@ Exit codes: 0 if `remaining_count == 0`, non-zero otherwise.
 
 ## Edge cases
 
-- Empty changed-files list → `No changed .py files.` exit 0.
+- Empty target list → `No .py files to lint.` exit 0.
 - Ruff parse error or stderr non-empty with no JSON → print stderr verbatim, exit non-zero.
 - File deleted in diff → already filtered by `--diff-filter=ACMR`.
-- All findings are Medium (hidden) → output `Fixed N low-severity issues. No critical/high findings.` exit 0 (Medium ignored by design).
+- All findings Medium (hidden) → output `Fixed N low-severity issues. No critical/high findings.` exit 0.
 - User chooses `n` with Critical present → exit non-zero with `0 fixed, N remaining.`.
-- Git not a repo → `Not a git repository.` exit non-zero.
+- `$ARGUMENTS == "all"` on a >5k file repo → ruff handles it; just slower. No special path needed.

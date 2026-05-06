@@ -7,7 +7,7 @@ allowed-tools: Bash, Read, Glob
 
 # /bt-ai:preflight
 
-Runner: !`python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('bt-ai',{}).get('runner','uv'))" 2>/dev/null || echo uv`
+Runner: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv`
 Repo state: !`git status --porcelain=v1`
 Branch: !`git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "<not-a-repo>"`
 Default branch: !`gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "main"`
@@ -19,7 +19,7 @@ Has unstaged: !`git diff --quiet 2>/dev/null && echo "no" || echo "yes"`
 
 **Sequential, halt-on-failure.** Each step either passes silently or halts with a one-line reason. Sub-skills run their own interactive prompts; their non-zero exits halt preflight.
 
-**Runner**: shell calls that run Python tools (pytest, gitlint) resolve the runner with `R=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('bt-ai',{}).get('runner','uv'))" 2>/dev/null || echo uv);` then invoke `$R run <tool>`. Dispatches to `uv run` or `poetry run` as set by `/bt-ai:proj-init`.
+**Runner**: `R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv);` then `$R run <tool>`. Dispatches to `uv run` or `poetry run` as set by `/bt-ai:proj-init`.
 
 ## Logic
 
@@ -52,7 +52,7 @@ If zero exit, continue. "All changed files already have tests" is a valid pass.
 ### Step 4 — pytest
 
 ```
-!R=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('bt-ai',{}).get('runner','uv'))" 2>/dev/null || echo uv); $R run pytest -q 2>&1 | tail -30
+!R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run pytest -q 2>&1 | tail -30
 ```
 
 If exit non-zero → output `Halted at step 4: pytest failed.` followed by the captured tail. Exit non-zero.
@@ -86,7 +86,7 @@ If non-zero → output `Halted at step 6: README out of sync.` exit non-zero.
 3. Validate via gitlint:
 
    ```
-   !R=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('bt-ai',{}).get('runner','uv'))" 2>/dev/null || echo uv); echo "<message>" | $R run gitlint --staged --msg-stdin 2>&1
+   !R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); echo "<message>" | $R run gitlint --staged --msg-stdin 2>&1
    ```
 
    Exit code 0 = valid. Non-zero = rule violation; gitlint prints the rule that failed.

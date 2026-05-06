@@ -1,3 +1,8 @@
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "build"]
-skips = []
+# B104 (binding 0.0.0.0): deploy-time concern — intentional inside containers,
+# noisy in dev. The /bt-ai:security skill already classifies it as BLOCKED to
+# prevent automatic rewrites; skipping here keeps it out of dev-time output too.
+# B101 (assert) is per-file-ignored to tests/** by ruff's S101 instead, since
+# bandit's whole-tree exclude on `tests` already covers that case here.
+skips = ["B104"]

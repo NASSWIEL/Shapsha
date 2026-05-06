@@ -19,7 +19,7 @@ You receive a JSON payload from the parent skill `/bt-ai:check-style`:
 
 ## Allowed actions
 
-**Runner**: resolve once at the top of each shell call: `R=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('bt-ai',{}).get('runner','uv'))" 2>/dev/null || echo uv);` then invoke `$R run ruff …`. Dispatches to `uv run` or `poetry run` based on `[tool.bt-ai].runner`.
+**Runner**: resolve once at the top of each shell call: `R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py");` then invoke `$R run ruff …`. Dispatches to `uv run` or `poetry run` based on `[tool.bt-ai].runner`.
 
 1. Run ruff's safe auto-fixes:
    ```

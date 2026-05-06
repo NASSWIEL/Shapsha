@@ -7,84 +7,83 @@ allowed-tools: Bash, Read, Glob
 
 # /bt-ai:security
 
-Runner: !`python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('bt-ai',{}).get('runner','uv'))" 2>/dev/null || echo uv`
+Argument: $ARGUMENTS
+Runner: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv`
 Changed Python files: !`{ git diff --name-only --diff-filter=ACMR -- '*.py' 2>/dev/null; git diff --cached --name-only --diff-filter=ACMR -- '*.py' 2>/dev/null; git ls-files --others --exclude-standard -- '*.py' 2>/dev/null; } | sort -u | tr '\n' ' '`
-Bandit version: !`R=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('bt-ai',{}).get('runner','uv'))" 2>/dev/null || echo uv); $R run bandit --version 2>&1 | head -1 || echo "bandit: NOT INSTALLED"`
+All Python files (only used if $ARGUMENTS == "all"): !`git ls-files -- '*.py' 2>/dev/null | tr '\n' ' '`
+Bandit version: !`R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv); $R run bandit --version 2>&1 | head -1 || echo "bandit: NOT INSTALLED"`
+
+## Argument
+
+| Argument | Behavior |
+|---|---|
+| (none)  | Scan changed files only (default) |
+| `all`   | Scan **every** tracked `.py` file in the repo |
+| anything else | Output `Unknown argument: <token>. Accepts no argument or 'all'.` and exit non-zero |
 
 ## Operating mode
 
-**Silent.** Run bandit via `!`, parse JSON, classify FIXABLE vs BLOCKED, emit only the final summary line and any AskUserQuestion required.
+**Silent.** Run bandit via `!`, pipe JSON into the bundled classifier, emit only the final summary and any AskUserQuestion required.
 
-**Runner**: shell calls that run Python tools resolve the runner with `R=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb')).get('tool',{}).get('bt-ai',{}).get('runner','uv'))" 2>/dev/null || echo uv);` then invoke `$R run bandit`. Dispatches to `uv run` or `poetry run` as set by `/bt-ai:proj-init`.
+**Hermetic — never write into the user's repo.** All helper logic lives in `${CLAUDE_PLUGIN_ROOT}/tools/`. Do not write `classify_*.py`, scratch JSON, log files, or any file that is not the actual user fix.
+
+**Runner**: `R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv);` then `$R run bandit`.
 
 ## Logic
 
 ### Pre-flight
 
-1. If changed-files is empty → output `No changed .py files.` exit 0.
-2. If `bandit: NOT INSTALLED` → output `bandit not installed. Run /bt-ai:proj-init.` exit non-zero.
-3. If not a git repository → output `Not a git repository.` exit non-zero.
+1. If `$ARGUMENTS` non-empty AND not exactly `all` → output `Unknown argument: <token>. Accepts no argument or 'all'.` exit non-zero.
+2. Decide target list (changed vs all) per `$ARGUMENTS`.
+3. If target list empty → `No .py files to scan.` exit 0.
+4. If `bandit: NOT INSTALLED` → `bandit not installed. Run /bt-ai:proj-init.` exit non-zero.
+5. If not in a git repo (changed-files path only) → `Not a git repository.` exit non-zero.
 
-### Scan
+### Scan + classify
+
+Pipe bandit JSON straight into the bundled classifier:
 
 ```
-!$R run bandit -f json -ll -ii <files> 2>/dev/null
+!R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run bandit -f json -ll -ii <files> 2>/dev/null | python "${CLAUDE_PLUGIN_ROOT}/tools/classify_bandit.py"
 ```
 
-`-ll` filters severity to >= MEDIUM. `-ii` filters confidence to >= MEDIUM. Bandit JSON output has `results` array with `test_id`, `filename`, `line_number`, `issue_severity`, `issue_confidence`, `issue_text`.
+`-ll` filters severity to >= MEDIUM, `-ii` confidence to >= MEDIUM. The classifier emits:
 
-### Classify per finding
+```
+summary blocked=N fixable=N total=N
+[<sev>/<conf>] [BLOCKED|FIXABLE] <path>:<line> <code> <message>
+```
 
-The **no-auto-fix blacklist** (must be `[BLOCKED]`):
+The classifier's BLOCKED set mirrors the table below — keep them in lockstep.
 
-Dangerous-execution rules (mechanically rewriting these would mask intent):
-- `B102` exec
-- `B307` eval
-- `B301` pickle deserialization
-- `B324` insecure hash (md5, sha1)
-- `B501` through `B508` (cryptography family)
-- `B602` through `B608` (subprocess / shell)
+### BLOCKED set (no auto-fix; human-only)
+
+Dangerous-execution (mechanically rewriting masks intent):
+- `B102` exec, `B307` eval, `B301` pickle, `B324` insecure hash (md5/sha1)
+- `B501`-`B508` (cryptography family)
+- `B602`-`B608` (subprocess / shell)
 - `B610`, `B611` (SQL injection)
 - `B701` jinja2 autoescape
 
-Context-sensitive rules (the finding may be intentional and the right fix depends on deployment context):
-- `B104` hardcoded bind to all interfaces (`0.0.0.0`) — intentional for containers
-- `B105` hardcoded password string (high false-positive rate on configuration keys)
-- `B106` hardcoded password as function argument (same)
-- `B107` hardcoded password as default argument (same)
-- `B108` hardcoded `/tmp` directory usage — may be deliberate
+Context-sensitive (intentional vs accidental depends on deployment):
+- `B104` bind to 0.0.0.0 (intentional in containers — also skipped at the bandit-config level via `[tool.bandit].skips`)
+- `B105`-`B107` hardcoded password heuristics (high false-positive rate)
+- `B108` hardcoded `/tmp` usage
 
-All others → `[FIXABLE]` (in the sense the agent may consider them; most still won't be auto-edited — see security-fixer agent).
-
-### Print findings
-
-For each finding, one line:
-
-```
-[<sev>/<conf>] [<class>] <path>:<line> <code> <message>
-```
-
-Examples:
-
-```
-[HIGH/HIGH] [BLOCKED]  src/app.py:42 B307 Use of insecure function eval
-[MED/HIGH]  [FIXABLE]  src/api.py:55 B101 Use of assert detected
-```
-
-Truncate `message` at 80 chars.
+Everything else → FIXABLE (most still report-only — see security-fixer agent).
 
 ### Branch
 
-- **No findings** → output `No security findings >= MEDIUM/MEDIUM.` exit 0.
-- **All findings BLOCKED** → output `<N> findings require manual fix.` and skip AskUserQuestion. Exit non-zero.
-- **At least one FIXABLE** → continue to ask.
+- **No findings** → `No security findings >= MEDIUM/MEDIUM.` exit 0.
+- **All findings BLOCKED** → `<N> findings require manual fix.` skip AskUserQuestion. Exit non-zero.
+- **At least one FIXABLE** → ask.
 
 ### Ask user
 
 AskUserQuestion (one prompt, three options):
 
-- `a` — Auto-fix the FIXABLE ones (delegates to `security-fixer` agent)
-- `s` — Show diffs first (agent in `mode=diff`, then re-ask `apply / cancel`)
+- `a` — Auto-fix the FIXABLE ones (delegates to `security-fixer`)
+- `s` — Show diffs first (`security-fixer` in `mode=diff`, then re-ask `apply / cancel`)
 - `n` — Skip
 
 ### Delegate to security-fixer
@@ -101,9 +100,9 @@ Invoke `Task` with agent `security-fixer`. Pass JSON:
 }
 ```
 
-Only forward FIXABLE findings; never forward BLOCKED ones (the agent has its own refusal list as defense in depth).
+Forward only FIXABLE findings; never forward BLOCKED ones (the agent has its own refusal list as defense in depth).
 
-Wait for agent's single line: `fixed=N reported=M refused=K`.
+Wait for agent's line: `fixed=N reported=M refused=K`.
 
 ## Output
 
@@ -122,4 +121,4 @@ Exit codes: 0 if `blocked == 0`, non-zero otherwise.
 - All findings BLOCKED → no AskUserQuestion shown.
 - User picks `n` → exit 0 (the user chose not to act; that is not an error).
 - Findings touch a file already removed from disk → bandit will skip; ignore.
-- pyproject.toml absent → bandit uses defaults; OK.
+- pyproject.toml absent → bandit uses defaults.
