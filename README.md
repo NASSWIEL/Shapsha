@@ -4,16 +4,14 @@ Standardise les pratiques Python d'équipe : style, sécurité, tests, documenta
 
 ## Installation
 
-```bash
-git clone https://github.com/NASSWIEL/bt-ai-plugin.git
-```
-
-Dans Claude Code :
+Dans Claude Code, deux commandes :
 
 ```
-/plugin marketplace add /chemin/vers/bt-ai-plugin
-/plugin install bt-ai
+/plugin marketplace add NASSWIEL/bt-ai-plugin
+/plugin install bt-ai@CGI-BT-AI
 ```
+
+La première récupère le marketplace `CGI-BT-AI` directement depuis GitHub (pas de `git clone` à faire). La seconde installe le plugin `bt-ai` depuis ce marketplace.
 
 ## Pré-requis
 
