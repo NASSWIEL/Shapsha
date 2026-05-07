@@ -41,10 +41,10 @@ Run each step in order. If a step exits non-zero, surface its message verbatim p
 
 **Step 3 — gen-tests.** Invoke `bt-ai:gen-tests` (no arguments → diff mode). Generates tests for changed Python files. Halts on test-collection failure or unresolved semantic failures.
 
-**Step 4 — full pytest.** Run the project's full test suite (not just the freshly generated tests):
+**Step 4 — full pytest.** Run the project's full test suite (not just the freshly generated tests). Replace `<runner>` with the literal Runner value from the Context above:
 
 ```
-R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run pytest -q 2>&1 | tail -30
+<runner> run pytest -q 2>&1 | tail -30
 ```
 
 If the exit code is non-zero, output `Halted at step 4: pytest failed.` followed by the captured tail. Stop.
@@ -57,9 +57,9 @@ If the exit code is non-zero, output `Halted at step 4: pytest failed.` followed
 
 1. Read the staged diff (already in Context above; if stale, re-read with `git diff --cached --stat` and `git diff --cached`).
 2. Build the message in memory: `<type>(<scope>?): <subject>` plus optional body, English, subject ≤ 72 chars, imperative.
-3. Validate via gitlint:
+3. Validate via gitlint (`<runner>` = literal Runner from Context):
    ```
-   echo "<message>" | $R run gitlint --staged --msg-stdin
+   echo "<message>" | <runner> run gitlint --staged --msg-stdin
    ```
 4. If gitlint exits non-zero, the user's repo `.gitlint` is rejecting the message. Re-write once based on the rule that fired (gitlint prints which one). If the second attempt also fails, output `Halted at step 7: commit message did not pass gitlint after rewrite.` followed by gitlint's output verbatim. Stop.
 5. On success, write the validated message to `.git/COMMIT_EDITMSG`:

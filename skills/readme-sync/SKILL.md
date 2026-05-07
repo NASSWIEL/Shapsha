@@ -12,7 +12,7 @@ allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git show:*), Bash(git ls-f
 - Pyproject scripts diff: !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --grep '^[+-].*(\[project.scripts\]|=)' --cap 30 'pyproject.toml' 2>/dev/null`
 - __all__ changes: !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --include-untracked --grep '__all__' --cap 10 '*.py' 2>/dev/null`
 - Env var additions: !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --include-untracked --grep 'os\.(environ|getenv)' --cap 10 '*.py' 2>/dev/null`
-- Pyproject deps name-set diff: !`python "${CLAUDE_PLUGIN_ROOT}/tools/pyproject_deps_diff.py" 2>/dev/null`
+- Pyproject diff: !`git diff -- pyproject.toml 2>/dev/null | head -40`
 - Install files changed: !`python "${CLAUDE_PLUGIN_ROOT}/tools/list_changed.py" Dockerfile Makefile pyproject.toml 2>/dev/null`
 - README.md exists: !`test -f README.md && echo yes || echo no`
 
@@ -31,7 +31,7 @@ Compute these flags from the captures above:
 - `scripts_changed` = pyproject scripts diff is non-empty AND mentions `[project.scripts]` or its entries
 - `all_changed` = `__all__` changes diff is non-empty
 - `env_vars_added` = env var additions diff is non-empty
-- `deps_added` = pyproject deps name-set diff is non-empty (`ADDED:` or `REMOVED:` line present). Pure version bumps do not fire this signal.
+- `deps_added` = the Pyproject diff shows a `+` (or `-`) line that introduces or removes a **package name** in `dependencies`, `optional-dependencies`, or `[tool.poetry.dependencies]`. A pure version-string change in an existing line (e.g., `"requests>=2.30"` → `"requests>=2.31"`) does **not** fire this signal — only name additions/removals do.
 - `install_files_changed` = install files list is non-empty
 
 If **all flags are false** → output `No README change needed.` Stop with success.

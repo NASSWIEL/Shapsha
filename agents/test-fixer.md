@@ -21,9 +21,12 @@ You receive from `/bt-ai:gen-tests` (verify phase):
   ],
   "test_files": ["tests/foo/test_bar.py", ...],
   "package_name": "smokepkg",
-  "import_root": "smokepkg"
+  "import_root": "smokepkg",
+  "runner": "uv"
 }
 ```
+
+`runner` is the literal command (`uv` or `poetry`) — use it directly when invoking pytest below.
 
 ## Operating mode
 
@@ -64,10 +67,10 @@ For each failure:
 3. **Apply** the per-kind action above.
 4. **Edit** the test file. Keep the edit minimal — touch only what is required to repair the named failure.
 
-After processing all failures:
+After processing all failures, run pytest collection using the `runner` from the input (substitute its literal value, e.g., `uv` or `poetry`):
 
 ```
-R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run pytest --collect-only <test_files>
+<runner> run pytest --collect-only <test_files>
 ```
 
 If collection fails, your edit broke something — count those tests as `still_failing`.

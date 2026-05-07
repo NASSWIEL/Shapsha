@@ -29,66 +29,62 @@ Run bandit on the changed (or `all`) Python files, classify findings, and emit a
 
 ### Scan and classify
 
-Pipe bandit JSON straight into the bundled classifier:
+Replace `<runner>` below with the literal Runner value from the Context above (`uv` or `poetry`). Run bandit with JSON output:
 
 ```
-R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run bandit -f json -ll -ii <files> 2>/dev/null | python "${CLAUDE_PLUGIN_ROOT}/tools/classify_bandit.py"
+<runner> run bandit -f json -ll -ii <files> 2>/dev/null
 ```
 
-`-ll` filters severity to >= MEDIUM, `-ii` confidence to >= MEDIUM. The classifier prints:
+`-ll` filters severity to >= MEDIUM, `-ii` confidence to >= MEDIUM.
 
-```
-summary blocked=N fixable=N total=N
-[<sev>/<conf>] [BLOCKED|FIXABLE] <path>:<line> <code> <message>
-```
+The output is JSON: `{"results": [{"filename", "line_number", "test_id", "issue_text", "issue_severity", "issue_confidence", ...}, ...], ...}`. Read it and classify each result, printing one line per finding:
+
+- `issue_severity == "HIGH"` AND `issue_confidence == "HIGH"` → **BLOCKED**. Print: `[HIGH/HIGH] [BLOCKED] <filename>:<line_number> <test_id> <issue_text>`. Increments `blocked_count`.
+- Anything else (MEDIUM/MEDIUM, MEDIUM/HIGH, HIGH/MEDIUM) → **ADVISORY**. Print: `[<severity>/<confidence>] [ADVISORY] <filename>:<line_number> <test_id> <issue_text>`. Increments `advisory_count`.
 
 ### Halt criterion
 
-The Halt rule is narrow on purpose: bandit auto-fix is dangerous (suppressing warnings silently), so this skill is **report-only** with one halt level.
+The halt rule is narrow on purpose: bandit auto-fix is dangerous (suppressing warnings silently), so this skill is **report-only** with one halt level.
 
-- **Halt** when ANY finding is `HIGH` severity AND `HIGH` confidence. These are bandit's strongest signals — exec, eval, pickle on untrusted data, hardcoded crypto keys, shell injection.
-- **Advisory** for MEDIUM/MEDIUM, MEDIUM/HIGH, HIGH/MEDIUM. The classifier already printed them. They do not halt the suite; the user reads them and acts in a follow-up commit if needed.
+- `blocked_count > 0` → output:
+  ```
+  Halted: <blocked_count> HIGH/HIGH security finding(s) require manual review.
+  ```
+  Stop with non-zero exit. **Skip the auxiliary scans on halt.**
 
-To detect HIGH/HIGH, re-pipe bandit with stricter flags:
-
-```
-R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run bandit -f json -lll -iii <files> 2>/dev/null | python -c "import sys,json; raw=sys.stdin.read(); print(len(json.loads(raw or '{}').get('results',[])) if raw.strip() else 0)"
-```
-
-If the count is `0` → continue to optional auxiliary scans (below) before emitting the summary.
-If the count is `> 0` → output:
-```
-Halted: <count> HIGH/HIGH security finding(s) require manual review.
-```
-Stop with non-zero exit. (Skip auxiliary scans on halt.)
+- `blocked_count == 0` → continue to auxiliary scans below.
 
 ### Auxiliary scans (opportunistic, advisory only)
 
-Run **only when the corresponding tool is installed** (per Context lines above). Each is advisory: it never halts the suite, only adds counts to the summary.
+Run **only when the corresponding tool is installed** (per Context lines above; if a probe returned `... NOT INSTALLED`, skip that scan). Each is advisory: it never halts the suite, only adds counts to the summary.
 
 **pip-audit** — dependency CVEs:
 
 ```
-$R run pip-audit --strict --progress-spinner=off 2>/dev/null | tail -20
+<runner> run pip-audit --strict --progress-spinner=off 2>/dev/null
 ```
 
-Count vulnerable packages by counting non-empty result rows (skip the header). Call this `deps_vulns`.
+The output is a table with a header row, then one row per vulnerable package. Count the non-empty data rows (skip the header line and any blank lines). Call this `deps_vulns`. If pip-audit was not installed, set `deps_vulns = "n/a"`.
 
 **detect-secrets** — hardcoded credentials in changed files:
 
 ```
-$R run detect-secrets scan --baseline /dev/null <files> 2>/dev/null | python -c "import sys,json; d=json.load(sys.stdin) if sys.stdin.isatty() is False else {}; print(sum(len(v) for v in d.get('results',{}).values()))"
+<runner> run detect-secrets scan --baseline /dev/null <files> 2>/dev/null
 ```
 
-Call the count `secrets_found`.
+The output is JSON: `{"results": {"<file>": [<finding>, ...], ...}, ...}`. Sum the lengths of all per-file lists in `results` to get `secrets_found`. If detect-secrets was not installed, set `secrets_found = "n/a"`.
 
 ### Final summary
 
 ```
-Security: <bandit_total> advisory bandit finding(s), <deps_vulns> dependency vuln(s), <secrets_found> potential secret(s). No HIGH/HIGH blocks.
+Security: <advisory_count> advisory bandit finding(s), <deps_vulns> dependency vuln(s), <secrets_found> potential secret(s). No HIGH/HIGH blocks.
 ```
 
-Omit segments whose tool was not installed. If both auxiliary tools are missing, the line collapses to the original bandit-only form.
+Omit a segment whose tool is `n/a`. If both auxiliary tools are missing, the line collapses to:
+
+```
+Security: <advisory_count> advisory bandit finding(s). No HIGH/HIGH blocks.
+```
 
 Stop with success.
 
@@ -96,5 +92,5 @@ Stop with success.
 
 - **No auto-fix.** Mechanically silencing a security warning is dangerous. This skill never edits user code.
 - **No AskUserQuestion.** Halt or pass; the user does not need a prompt to read a printed list.
-- **Hermetic.** No scratch files in the user's repo.
+- **Hermetic.** Never write classifier scripts or scratch files into the user's repo. The model classifies bandit's JSON output directly.
 - **Single message.** Do classify + summary in one tool-call turn. Do not narrate.

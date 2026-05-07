@@ -37,19 +37,16 @@ Generate the missing pytest tests for the resolved targets, verify they collect+
 
 ### Discover targets
 
-Targeted mode passes `--no-skip-filter` (when the user explicitly named files, respect that intent and skip the FastAPI/Streamlit/CLI heuristics). Diff and `all` modes keep the filter on.
+The model performs target discovery directly using `Read` and `Glob`. Build two lists: `targets` (files needing test generation) and `skipped` (files filtered out, with reason).
 
-```
-# diff mode / all mode: filter on
-printf '%s\n' <files> | python "${CLAUDE_PLUGIN_ROOT}/tools/discover_test_targets.py"
+**Step 1 — Resolve `package_name` and `import_root`** from `pyproject.toml`:
+- `Read` `pyproject.toml`. Extract `[project].name` (PEP 621) or `[tool.poetry].name`. Lowercase, replace hyphens with underscores → `package_name`.
+- If `src/<package_name>/` exists (`Glob` for `src/<package_name>/__init__.py`) → `import_root = package_name`.
+- Else if `<package_name>/__init__.py` exists at repo root → `import_root = package_name`.
+- Else if `src/__init__.py` exists or sources live under `src/` → `import_root = "src"`.
+- Else → `import_root = null`, `package_name = null` (path-based imports).
 
-# targeted mode: filter off
-printf '%s\n' <files> | python "${CLAUDE_PLUGIN_ROOT}/tools/discover_test_targets.py" --no-skip-filter
-```
-
-The tool returns JSON with `targets`, `skipped`, `package_name`, `import_root`. Skip reasons: `fastapi-handler`, `streamlit-page`, `cli-entrypoint`, `model-only`, `no-public-symbols`, `all-tested`.
-
-Path mirror is deterministic:
+**Step 2 — Path mirror** (deterministic):
 
 | Source | Test path |
 |---|---|
@@ -57,11 +54,27 @@ Path mirror is deterministic:
 | `foo/bar.py` (no `src/`) | `tests/foo/test_bar.py` |
 | `pkg.py` (root) | `tests/test_pkg.py` |
 
-If `targets` is empty → output `All target files already have tests (or were skipped). N skipped: <reason summary>.` Stop with success.
+**Step 3 — Skip filter.** Diff mode and `all` mode apply the filter; **targeted mode skips this step** (when the user explicitly named files, respect that intent). For each source, `Read` the file content and apply heuristics in order. The first match wins:
+
+| Skip reason | Detection |
+|---|---|
+| `fastapi-handler` | Imports `fastapi` AND defines a router/app at module top level (e.g., `app = FastAPI(...)`, `router = APIRouter(...)`) |
+| `streamlit-page` | Imports `streamlit` (typically `import streamlit as st`) |
+| `cli-entrypoint` | Has `if __name__ == "__main__":` AND uses `argparse`, `click`, `typer`, or `sys.argv` directly |
+| `model-only` | Module's only top-level non-underscore symbols are dataclasses (`@dataclass`), Pydantic models (inherit `BaseModel`), or `Enum` subclasses. No standalone functions. |
+| `no-public-symbols` | No top-level `def`, `async def`, or `class` whose name does not start with `_` |
+
+**Step 4 — Existing-tests check.** For each non-skipped source, compute its `test_path` (Step 2), then `Glob` for it. If the test file exists, `Read` it and list its top-level `def test_*` functions. For each public symbol in the source, check whether at least one test mentions the symbol name. If every public symbol has a corresponding test, skip with reason `all-tested`.
+
+**Step 5 — Build `missing_symbols`.** For each source that survived all filters, list public symbols (top-level `def`/`async def`/`class` not starting with `_`) that have no existing test. Each entry: `{"name": "<symbol>", "is_async": <bool>}` (true only for `async def` symbols).
+
+**Step 6 — Assemble `targets[]`.** Each target: `{"source_path", "test_path", "missing_symbols"}`. Drop targets whose `missing_symbols` is empty (treat as `all-tested`).
+
+If `targets` is empty after this discovery → output `All target files already have tests (or were skipped). N skipped: <reason summary>.` Stop with success.
 
 ### Delegate to test-writer
 
-Invoke `Task` with subagent `test-writer`. Pass the discovery JSON unchanged (it expects `targets`, `package_name`, `import_root`).
+Invoke `Task` with subagent `test-writer`. Pass JSON containing `targets`, `package_name`, `import_root`, plus `runner` (the literal Runner from the Context, `uv` or `poetry`).
 
 Wait for the agent's structured line: `files=<list> tests_added=<n> collection_ok=<true|false>`.
 
@@ -74,16 +87,34 @@ for f in <files from agent return>; do git add -- "$f"; done
 
 ### Verify
 
-Run pytest on the freshly written test paths and pipe through the bundled failure parser:
+Run pytest on the freshly written test paths. Replace `<runner>` with the literal Runner value from the Context above:
 
 ```
-R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run pytest -q --no-header --tb=short <new test paths> 2>&1 | python "${CLAUDE_PLUGIN_ROOT}/tools/parse_pytest_failures.py"
+<runner> run pytest -q --no-header --tb=short <new test paths> 2>&1
 ```
 
-The parser returns JSON with `passed`, `failed`, `errors`, `mechanical[]`, `semantic[]`.
+Read pytest's output. The "short test summary info" block at the end lists each failure (one line per `FAILED` or `ERROR`). Above it, each traceback ends with the actual error type. Build counters `passed`, `failed`, `errors` from the final pytest summary line, then for each failure produce a `{test_id, kind, detail}` entry routed to `mechanical[]` or `semantic[]`:
 
-- **MECHANICAL** (auto-fixable): `ModuleNotFoundError`, `ImportError`, `NameError`, `fixture-not-found`, `missing-argument`, `SyntaxError`, `AttributeError-import`.
-- **SEMANTIC** (judgment): `AssertionError`, `DID-NOT-RAISE`, `WrongExceptionType`, `Other`.
+**MECHANICAL** (auto-fixable, route to `test-fixer`):
+
+| `kind` | Detection |
+|---|---|
+| `ModuleNotFoundError` | Traceback ends with `ModuleNotFoundError: No module named '...'` |
+| `ImportError` | Traceback ends with `ImportError: cannot import name '...' from '...'` |
+| `NameError` | Traceback ends with `NameError: name '...' is not defined` |
+| `fixture-not-found` | ERROR section contains `fixture '...' not found` |
+| `missing-argument` | `TypeError: <fn>() missing N required positional argument` |
+| `SyntaxError` | Traceback ends with `SyntaxError: ...` |
+| `AttributeError-import` | `AttributeError: module '...' has no attribute '...'` from a stale `from X import Y` |
+
+**SEMANTIC** (judgment-required, halt):
+
+| `kind` | Detection |
+|---|---|
+| `AssertionError` | `assert <left> == <right>` (or other comparison) failure with concrete values |
+| `DID-NOT-RAISE` | `Failed: DID NOT RAISE <ExceptionType>` |
+| `WrongExceptionType` | `pytest.raises(...)` caught a different exception type than expected |
+| `Other` | Anything not matched above |
 
 #### If `failed == 0 && errors == 0`
 
@@ -98,20 +129,23 @@ Auto-delegate to subagent `test-fixer` with the mechanical list. Cap retries at 
   "failures": [{"test_id": "...", "kind": "ImportError", "detail": "..."}],
   "test_files": ["..."],
   "package_name": "...",
-  "import_root": "..."
+  "import_root": "...",
+  "runner": "uv"
 }
 ```
 
-Wait for the agent's line: `repaired=<n> still_failing=<n> files=<list>`. After each iteration, re-stage modified files and re-run pytest+parser.
+(`runner` is the literal Runner from the Context, `uv` or `poetry`.)
+
+Wait for the agent's line: `repaired=<n> still_failing=<n> files=<list>`. After each iteration, re-stage modified files and re-run pytest, re-classifying failures the same way.
 
 #### If semantic failures remain
 
-Output `Halted: <n> generated test(s) need manual review.` followed by the per-test summary lines from the parser. Stop with non-zero exit.
+Output `Halted: <n> generated test(s) need manual review.` followed by one line per semantic failure (`<test_id>: <kind> — <detail>`). Stop with non-zero exit.
 
 The user inspects the failures, fixes them by hand, and re-runs preflight or commits manually. **Do not** ask the user keep/regen/discard — that prompt forced a 5-minute pause on every preflight.
 
 ### Hard rules
 
 - **No AskUserQuestion.** This skill auto-fixes what is mechanically fixable, and halts cleanly on the rest.
-- **Hermetic.** Never write `gen_tests_*.py`, `targets.json`, or any scratch helper into the user's tree. The user's `git status` shows only the new `tests/**.py` files (plus any test-fixer edits).
+- **Hermetic.** Never write `gen_tests_*.py`, `targets.json`, parser scripts, or any scratch helper into the user's tree. The user's `git status` shows only the new `tests/**.py` files (plus any test-fixer edits).
 - **Single message.** Discover + delegate + stage + verify is one message per phase. No narration.

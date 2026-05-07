@@ -27,9 +27,12 @@ You receive from `/bt-ai:gen-tests`:
   ],
   "package_name": "<string or null>",
   "import_root": "<string or null>",
+  "runner": "uv",
   "previous_failures": []   // optional, present only on regen retry
 }
 ```
+
+`runner` is the literal command (`uv` or `poetry`) — use it directly when invoking pytest collection below.
 
 ## Hard rules
 
@@ -108,13 +111,13 @@ For each target:
    - `test_path` exists → `Edit` to append the new functions at end-of-file. Reuse existing imports if compatible; add new imports at the top of the import block (after existing imports).
    - **Always create the parent directory first** if missing: e.g., `mkdir -p tests/foo` for `tests/foo/test_bar.py`.
 
-7. **After writing all targets**, run pytest collection (sanity check, not full execution — the parent skill handles run+verify):
+7. **After writing all targets**, run pytest collection (sanity check, not full execution — the parent skill handles run+verify). Use the `runner` from the input (literal `uv` or `poetry`):
 
    ```
-   R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run pytest --collect-only <new/modified test files>
+   <runner> run pytest --collect-only <new/modified test files>
    ```
 
-   Capture exit code into `collection_ok`. Dispatches to `uv run` or `poetry run` per `[tool.bt-ai].runner`.
+   Capture exit code into `collection_ok`.
 
 ## Regen mode (if `previous_failures` present)
 
