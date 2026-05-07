@@ -1,8 +1,8 @@
 ---
 name: doc-sync
-description: Sync French docs in docs/ with code changes from git diff. Auto-applies clean patches; halts only when patches fail to apply.
+description: Synchronise les docs FR dans docs/ avec les changements de code (git diff). Remplit les placeholders {{...}} au premier passage. Applique les patches propres ; s'arrête si un patch échoue.
 disable-model-invocation: true
-allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git add:*), Bash(git rev-parse:*), Bash(cat:*), Read, Glob, Edit
+allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git add:*), Bash(git rev-parse:*), Bash(cat:*), Bash(grep:*), Read, Glob, Edit
 ---
 
 # /bt-ai:doc-sync
@@ -12,6 +12,7 @@ allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git 
 - Diff stat (tracked changes): !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --stat --cap 50 '*.py' 'pyproject.toml' '*.md' 2>/dev/null`
 - Untracked files: !`git ls-files --others --exclude-standard -- '*.py' 'pyproject.toml' '*.md' 2>/dev/null | head -20`
 - Diff (capped at 500 lines, includes untracked as new-file hunks): !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --include-untracked --cap 500 '*.py' 'pyproject.toml' 2>/dev/null`
+- Docs with placeholders (template-fill candidates): !`grep -l -E '\{\{[^}]+\}\}|À compléter|Phrase unique' docs/*.md 2>/dev/null || true`
 
 ## Your task
 
@@ -19,8 +20,9 @@ Detect impacted French docs from the code diff, compute minimal unified-diff pat
 
 ### Guards
 
-1. Diff stat is empty (no changes in `*.py`, `pyproject.toml`, or `*.md`) → output `No code changes detected. Docs unchanged.` Stop with success.
-2. `docs/` folder is absent → output `docs/ folder absent. Run /bt-ai:proj-init first.` Stop.
+1. `docs/` folder is absent → output `docs/ folder absent. Run /bt-ai:proj-init first.` Stop.
+2. Diff stat is empty AND "Docs with placeholders" is empty → output `No code changes detected. Docs unchanged.` Stop with success.
+3. Diff stat is empty BUT "Docs with placeholders" is non-empty → enter **template-fill mode**: docs were freshly bootstrapped and have never been authored. Continue to delegation; the agent fills placeholders from code instead of from the diff.
 
 ### Delegate to doc-patcher
 
@@ -30,6 +32,7 @@ Invoke `Task` with subagent `doc-patcher`. Pass JSON:
 {
   "diff": "<full text from above, capped at 500 lines>",
   "docs_path": "docs/",
+  "placeholder_docs": ["<paths from 'Docs with placeholders' line, or empty list>"],
   "routing": {
     "data-model.md": "class definitions, dataclass fields, schema changes, entity relationships",
     "contracts.md": "new endpoint, route, public method, event signature, API contract",

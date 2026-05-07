@@ -1,6 +1,6 @@
 ---
 name: proj-init
-description: Bootstrap a Python project with bt-ai standards (uv/poetry tools, configs, doc/README templates). Hybrid silent mode.
+description: Initialise un projet Python aux standards bt-ai (outils uv/poetry, configs, gabarits doc/README). Mode silencieux hybride.
 disable-model-invocation: true
 allowed-tools: Bash, Read, Glob
 ---

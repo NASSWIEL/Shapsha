@@ -1,6 +1,6 @@
 ---
 allowed-tools: Bash(git checkout:*), Bash(git add:*), Bash(git status:*), Bash(git diff:*), Bash(git push:*), Bash(git commit:*), Bash(git log:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(test:*), Bash(cat:*), Bash(rm:*), Bash(gh pr create:*), Bash(gh repo view:*), Bash(gh auth status:*)
-description: Commit, push, and open a PR (English title, French body)
+description: Commit, push, et ouvre une PR (titre en anglais, corps en français)
 disable-model-invocation: true
 ---
 
@@ -24,7 +24,13 @@ Commit the staged changes, push, and open a pull request. Do everything in a sin
 ### Guards (halt before any work)
 
 1. Branch is `<not-a-repo>` → output `Not a git repository.` Stop.
-2. GH auth is `missing` → output `gh auth required: run 'gh auth login'.` Stop.
+2. GH auth is `missing` → fall back to push-only mode (no PR creation). Skip step 4 and instead, after step 3, output the push confirmation followed by:
+   ```
+   Pushed. Skipping PR creation: gh CLI not authenticated.
+   The 'gh' CLI is independent from git credentials — it needs its own login to call the GitHub API.
+   To enable PR creation: run 'gh auth login' once, then retry /bt-ai:commit-push-pr (or use 'gh pr create' manually).
+   ```
+   Stop with success.
 3. Nothing staged AND nothing unstaged → output `Nothing to commit.` Stop.
 4. Something is unstaged but nothing staged → output `Unstaged changes detected. Stage them first (git add) or run /bt-ai:preflight.` Stop.
 
@@ -62,6 +68,8 @@ EOF
 ```
 git push -u origin "$(git rev-parse --abbrev-ref HEAD)"
 ```
+
+If GH auth was `missing` (push-only fallback above), do not run step 4 — emit the fallback message after step 3 and stop.
 
 ### Step 4 — open PR
 

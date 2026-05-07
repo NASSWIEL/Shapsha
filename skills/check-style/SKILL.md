@@ -1,6 +1,6 @@
 ---
 name: check-style
-description: Lint changed Python files with ruff. Auto-applies safe fixes silently. Halts only on Critical findings (F*, E9*) requiring human judgment.
+description: Lint des fichiers Python modifiés avec ruff. Applique les corrections sûres en silence. S'arrête uniquement sur les findings critiques (F*, E9*).
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git status:*), Bash(git rev-parse:*)
 ---

@@ -1,6 +1,6 @@
 ---
 name: security
-description: Scan changed Python files with bandit. Print findings >= MEDIUM severity AND >= MEDIUM confidence. Halts only on HIGH/HIGH; MEDIUM is advisory.
+description: Analyse de sécurité bandit sur les fichiers Python modifiés. Affiche les findings >= MEDIUM. S'arrête uniquement sur HIGH/HIGH ; MEDIUM est consultatif.
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git rev-parse:*)
 ---

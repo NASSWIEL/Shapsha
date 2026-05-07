@@ -1,6 +1,6 @@
 ---
 name: preflight
-description: Pre-PR validation suite. Sequentially runs check-style, security, gen-tests, pytest, doc-sync, readme-sync, gitlint message gate, then commit-push-pr. Silent on the happy path.
+description: Suite de validation pré-PR. Enchaîne check-style, security, gen-tests, pytest, doc-sync, readme-sync, gitlint, puis commit-push-pr. Silencieux sur le chemin heureux.
 disable-model-invocation: true
 allowed-tools: Bash(git status:*), Bash(git rev-parse:*), Bash(git diff:*), Bash(git branch:*), Bash(gh repo view:*), Bash(gh auth status:*), Bash(command:*), Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(cat:*), Bash(test:*), Skill, Read
 ---

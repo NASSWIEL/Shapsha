@@ -1,6 +1,6 @@
 ---
 name: readme-sync
-description: Update root README.md only when user-facing surface changes (CLI scripts, public API, dependencies, env vars, install files). Auto-applies clean patches.
+description: Met à jour le README.md racine uniquement si la surface utilisateur change (scripts CLI, API publique, dépendances, variables d'env, fichiers d'install). Applique les patches propres.
 disable-model-invocation: true
 allowed-tools: Bash(git diff:*), Bash(git show:*), Bash(git ls-files:*), Bash(git add:*), Bash(git rev-parse:*), Bash(python:*), Bash(grep:*), Read, Glob, Edit
 ---
@@ -12,44 +12,7 @@ allowed-tools: Bash(git diff:*), Bash(git show:*), Bash(git ls-files:*), Bash(gi
 - Pyproject scripts diff: !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --grep '^[+-].*(\[project.scripts\]|=)' --cap 30 'pyproject.toml' 2>/dev/null`
 - __all__ changes: !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --include-untracked --grep '__all__' --cap 10 '*.py' 2>/dev/null`
 - Env var additions: !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --include-untracked --grep 'os\.(environ|getenv)' --cap 10 '*.py' 2>/dev/null`
-- Pyproject deps name-set diff: !`python -c "
-import re, subprocess, sys
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib
-
-def names(deps):
-    out = set()
-    for d in deps or []:
-        m = re.match(r'[A-Za-z0-9_.\-]+', str(d).strip())
-        if m:
-            out.add(m.group(0).lower())
-    return out
-
-def project_deps(toml_bytes):
-    try:
-        data = tomllib.loads(toml_bytes.decode('utf-8'))
-    except Exception:
-        return None
-    proj = data.get('project', {}).get('dependencies', [])
-    poetry = data.get('tool', {}).get('poetry', {}).get('dependencies', {})
-    poetry_names = list(poetry.keys()) if isinstance(poetry, dict) else []
-    return (names(proj) | names(poetry_names)) - {'python'}
-
-try:
-    head = subprocess.run(['git','show','HEAD:pyproject.toml'], capture_output=True, check=False).stdout
-    cur = open('pyproject.toml','rb').read()
-except Exception:
-    sys.exit(0)
-
-old = project_deps(head) if head else set()
-new = project_deps(cur) or set()
-added = sorted(new - old)
-removed = sorted(old - new)
-if added: print('ADDED:', ' '.join(added))
-if removed: print('REMOVED:', ' '.join(removed))
-" 2>/dev/null | head -10`
+- Pyproject deps name-set diff: !`python "${CLAUDE_PLUGIN_ROOT}/tools/pyproject_deps_diff.py" 2>/dev/null
 - Install files changed: !`python "${CLAUDE_PLUGIN_ROOT}/tools/list_changed.py" Dockerfile Makefile pyproject.toml 2>/dev/null`
 
 ## Your task

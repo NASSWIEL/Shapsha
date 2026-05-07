@@ -1,6 +1,6 @@
 ---
 name: gen-tests
-description: Generate pytest tests for changed Python files (or for an explicit target). Mirrors source tree under tests/. Verifies generated tests pass; auto-repairs mechanical failures. Halts on semantic failures.
+description: Génère des tests pytest pour les fichiers Python modifiés (ou une cible explicite). Reflète l'arborescence sous tests/. Vérifie et auto-répare les échecs mécaniques. S'arrête sur les échecs sémantiques.
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash(git diff:*), Bash(git ls-files:*), Bash(printf:*), Read, Glob
 ---
