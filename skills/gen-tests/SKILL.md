@@ -1,6 +1,6 @@
 ---
 name: gen-tests
-description: Génère des tests pytest pour les fichiers Python modifiés (ou une cible explicite). Reflète l'arborescence sous tests/. Vérifie et auto-répare les échecs mécaniques. S'arrête sur les échecs sémantiques.
+description: "Génère des tests pytest pour les fichiers Python modifiés (ou une cible explicite). Reflète l'arborescence sous tests/. Fan-out parallèle (un sous-agent par fichier source, en simultané). Vérifie et auto-répare les échecs mécaniques. S'arrête sur les échecs sémantiques."
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash(git diff:*), Bash(git ls-files:*), Bash(printf:*), Read, Glob
 ---
@@ -25,7 +25,7 @@ Three modes (decided from `$ARGUMENTS`):
 
 ## Your task
 
-Generate the missing pytest tests for the resolved targets, verify they collect+pass, auto-repair mechanical failures, and emit one summary line. Halt only when semantic failures (real assertion mismatches) remain — those need the human's judgment, not another retry.
+Generate the missing pytest tests for the resolved targets via **parallel fan-out** (one `test-writer` subagent per source file, all spawned in a single message), verify they collect+pass, auto-repair mechanical failures, and emit one summary line. Halt only when semantic failures (real assertion mismatches) remain — those need the human's judgment, not another retry.
 
 ### Guards
 
@@ -72,25 +72,49 @@ The model performs target discovery directly using `Read` and `Glob`. Build two 
 
 If `targets` is empty after this discovery → output `All target files already have tests (or were skipped). N skipped: <reason summary>.` Stop with success.
 
-### Delegate to test-writer
+### Fan-out to test-writer (parallel)
 
-Invoke `Task` with subagent `test-writer`. Pass JSON containing `targets`, `package_name`, `import_root`, plus `runner` (the literal Runner from the Context, `uv` or `poetry`).
+**Issue ALL `Task` calls in a single message** — this is the parallelism that delivers the speedup. For N targets ≤ 10, that's N `Task` tool calls in the same response. For N > 10, split into batches of 10 across consecutive messages (Claude Code's parallel limit is 10 per message).
 
-Wait for the agent's structured line: `files=<list> tests_added=<n> collection_ok=<true|false>`.
+Each `Task` call invokes subagent `test-writer` with this JSON:
 
-If `collection_ok=false` → output `Halted: test collection failed.` followed by the agent's verbatim error. Stop.
-
-Stage the new/modified test files:
+```json
+{
+  "target": {
+    "source_path": "...",
+    "test_path": "...",
+    "missing_symbols": [...]
+  },
+  "package_name": "<package_name from Step 1>",
+  "import_root": "<import_root from Step 1>",
+  "runner": "<literal Runner from Context, uv or poetry>"
+}
 ```
-for f in <files from agent return>; do git add -- "$f"; done
+
+Each subagent returns a single line:
+
 ```
+file=<test_path> tests_added=<n> omitted=<n> collection_ok=<true|false>
+```
+
+Aggregate across all subagents:
+- `files` = list of every `file=` value
+- `total_added` = sum of `tests_added`
+- `total_omitted` = sum of `omitted`
+- `collection_ok_all` = AND of all `collection_ok` values
+
+If `collection_ok_all == false` → output `Halted: test collection failed.` followed by the file=... line(s) where collection_ok=false. Stop.
+
+### Stage
+
+For each file in `files`, run `git add -- "<file>"`.
 
 ### Verify
 
-Run pytest on the freshly written test paths. Replace `<runner>` with the literal Runner value from the Context above:
+Run pytest on all the freshly written test paths in one batch. Replace `<runner>` with the literal Runner value from the Context above:
 
 ```
-<runner> run pytest -q --no-header --tb=short <new test paths> 2>&1
+<runner> run pytest -q --no-header --tb=short <space-separated test paths from files> 2>&1
 ```
 
 Read pytest's output. The "short test summary info" block at the end lists each failure (one line per `FAILED` or `ERROR`). Above it, each traceback ends with the actual error type. Build counters `passed`, `failed`, `errors` from the final pytest summary line, then for each failure produce a `{test_id, kind, detail}` entry routed to `mechanical[]` or `semantic[]`:
@@ -118,7 +142,7 @@ Read pytest's output. The "short test summary info" block at the end lists each 
 
 #### If `failed == 0 && errors == 0`
 
-Output `Generated tests for N files: <comma-list>. All tests pass.` Stop with success.
+Output `Generated tests for N files in parallel: <comma-list>. All tests pass.` Stop with success.
 
 #### If only mechanical failures remain
 
@@ -130,11 +154,9 @@ Auto-delegate to subagent `test-fixer` with the mechanical list. Cap retries at 
   "test_files": ["..."],
   "package_name": "...",
   "import_root": "...",
-  "runner": "uv"
+  "runner": "<literal Runner from Context, uv or poetry>"
 }
 ```
-
-(`runner` is the literal Runner from the Context, `uv` or `poetry`.)
 
 Wait for the agent's line: `repaired=<n> still_failing=<n> files=<list>`. After each iteration, re-stage modified files and re-run pytest, re-classifying failures the same way.
 
@@ -142,10 +164,11 @@ Wait for the agent's line: `repaired=<n> still_failing=<n> files=<list>`. After 
 
 Output `Halted: <n> generated test(s) need manual review.` followed by one line per semantic failure (`<test_id>: <kind> — <detail>`). Stop with non-zero exit.
 
-The user inspects the failures, fixes them by hand, and re-runs preflight or commits manually. **Do not** ask the user keep/regen/discard — that prompt forced a 5-minute pause on every preflight.
+The user inspects the failures, fixes them by hand, and re-runs preflight or commits manually. **Do not** ask the user keep/regen/discard.
 
 ### Hard rules
 
+- **Fan-out parallèle**: les N appels `Task` partent dans **un seul message** du parent. Sériels = pénalité de 5-10× sur le wall-clock.
 - **No AskUserQuestion.** This skill auto-fixes what is mechanically fixable, and halts cleanly on the rest.
 - **Hermetic.** Never write `gen_tests_*.py`, `targets.json`, parser scripts, or any scratch helper into the user's tree. The user's `git status` shows only the new `tests/**.py` files (plus any test-fixer edits).
-- **Single message.** Discover + delegate + stage + verify is one message per phase. No narration.
+- **Single message per phase.** Discover (1 message of Reads/Globs), fan-out (1 message of N Tasks), stage (1 message of git adds), verify (1 message), then retry loop (1 message per iteration).
