@@ -21,7 +21,7 @@ Three modes (decided from `$ARGUMENTS`):
 - Runner: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv`
 - Changed Python files: !`python "${CLAUDE_PLUGIN_ROOT}/tools/list_changed.py" --no-tests 2>/dev/null`
 - All Python files (only used if $ARGUMENTS == "all"): !`python "${CLAUDE_PLUGIN_ROOT}/tools/list_changed.py" --all --no-tests 2>/dev/null`
-- Pytest version: !`R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv); $R run pytest --version 2>&1 | head -1 || echo "pytest: NOT INSTALLED"`
+- Pytest version: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" --probe pytest 2>/dev/null`
 
 ## Your task
 
