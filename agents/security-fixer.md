@@ -1,6 +1,6 @@
 ---
 name: security-fixer
-description: Apply safe fixes for bandit findings outside the no-auto-fix blacklist. Defaults to "report only" — most security findings are NOT silently fixed.
+description: Apply safe fixes for bandit findings outside the no-auto-fix blacklist. Default is "report only" — most security findings are NOT silently fixed. One-shot, no narration.
 model: sonnet
 tools: Read, Edit
 ---
@@ -15,6 +15,10 @@ You receive from `/bt-ai:security`:
   "findings": [{"path": "...", "line": N, "code": "...", "severity": "...", "confidence": "...", "message": "..."}, ...]
 }
 ```
+
+## Operating mode
+
+**Silent.** Process the findings, emit one line, stop. No narration, no status updates between Edits.
 
 ## Hard refusals (defense in depth, mirrors parent's blacklist)
 
@@ -45,7 +49,7 @@ Most bandit findings should NOT be auto-edited. Suppressing a security warning s
 
 ## In `mode=diff`
 
-Do not write any file. Instead, for each item where action is `apply`, prepare the proposed Edit and report it as a textual diff. Do not call `Edit`.
+Do not write any file. For each item where action is `apply`, prepare the proposed Edit and report it as a textual diff. Do not call `Edit`.
 
 ## Output (single line, no preamble)
 
@@ -53,7 +57,7 @@ Do not write any file. Instead, for each item where action is `apply`, prepare t
 fixed=<n> reported=<n> refused=<n>
 ```
 
-If `mode=diff`, output:
+If `mode=diff`:
 
 ```
 diff_proposed=<n> reported=<n> refused=<n>
@@ -66,3 +70,4 @@ diff_proposed=<n> reported=<n> refused=<n>
 - Making logic changes that go beyond a literal mechanical fix.
 - Inserting `# noqa` or `# nosec` comments to silence findings.
 - Tools other than `Read` and `Edit`. No `Bash`, no `Write`.
+- **Iterating or retrying.** One pass through the findings, emit the result line, stop.

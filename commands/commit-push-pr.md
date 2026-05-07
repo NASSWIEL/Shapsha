@@ -1,75 +1,71 @@
 ---
 allowed-tools: Bash(git checkout:*), Bash(git add:*), Bash(git status:*), Bash(git diff:*), Bash(git push:*), Bash(git commit:*), Bash(git log:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(test:*), Bash(cat:*), Bash(rm:*), Bash(gh pr create:*), Bash(gh repo view:*), Bash(gh auth status:*)
-description: Commit, push, and open a PR with a French body. Re-uses .git/COMMIT_EDITMSG if present.
+description: Commit, push, and open a PR (English title, French body)
 disable-model-invocation: true
 ---
 
 # /bt-ai:commit-push-pr
 
-Repo state: !`git status --porcelain=v1`
-Branch: !`git rev-parse --abbrev-ref HEAD`
-Default branch: !`gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "main"`
-GH auth: !`gh auth status 2>&1 | head -3`
-Staged diff stat: !`git diff --cached --stat`
-Staged diff: !`git diff --cached`
-Pre-validated commit message (if /bt-ai:preflight ran): !`test -s .git/COMMIT_EDITMSG && cat .git/COMMIT_EDITMSG || echo "<none>"`
+## Context
 
-## Operating mode
+- Repo state: !`git status --porcelain=v1`
+- Branch: !`git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "<not-a-repo>"`
+- Default branch: !`gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo main`
+- GH auth: !`gh auth status >/dev/null 2>&1 && echo ok || echo missing`
+- Staged stat: !`git diff --cached --stat`
+- Staged diff: !`git diff --cached`
+- Recent subjects: !`git log -5 --pretty=format:"%s" 2>/dev/null`
+- Pre-validated message (preflight): !`test -s .git/COMMIT_EDITMSG && cat .git/COMMIT_EDITMSG || echo "<none>"`
 
-**Silent.** No "Now I will commit..." narration. Output the PR URL on success.
+## Your task
 
-## Logic
+Commit the staged changes, push, and open a pull request. Do everything in a single message — multiple tool calls in one turn — with no narration between them.
 
-### Pre-flight
+### Guards (halt before any work)
 
-1. If not a git repository → `Not a git repository.` exit non-zero.
-2. If `gh auth status` shows not authenticated → `gh auth required: run gh auth login.` exit non-zero.
-3. If nothing staged AND nothing unstaged → `Nothing to commit.` exit 0.
-4. If something is unstaged but not staged → `Unstaged changes detected. Stage them first or run /bt-ai:preflight.` exit non-zero.
+1. Branch is `<not-a-repo>` → output `Not a git repository.` Stop.
+2. GH auth is `missing` → output `gh auth required: run 'gh auth login'.` Stop.
+3. Nothing staged AND nothing unstaged → output `Nothing to commit.` Stop.
+4. Something is unstaged but nothing staged → output `Unstaged changes detected. Stage them first (git add) or run /bt-ai:preflight.` Stop.
 
-### Step 1 — Branch handling
+### Step 1 — branch
 
-If current branch equals default branch:
+If Branch equals Default branch:
+- Infer Conventional Commit `<type>` (feat/fix/docs/refactor/test/chore/perf/build/ci/style/revert) from the staged diff. Pick the dominant intent.
+- Build `<slug>` from the diff: ≤ 5 words, lowercase, kebab-case, no stop words.
+- Run `git checkout -b <type>/<slug>`. If that name already exists locally, append `-2`, `-3`, … until unique.
 
-1. Determine a `<type>/<short-slug>` from the staged diff:
-   - `<type>` from Conventional Commit type (feat/fix/docs/refactor/test/chore/...) inferred from diff.
-   - `<slug>` = up to 5 words, kebab-case, lowercase, derived from the dominant change.
-2. `!git checkout -b <type>/<slug>`. If branch already exists, append `-2`, `-3`, ...
+If Branch is already a feature branch, skip step 1.
 
-### Step 2 — Commit message
+### Step 2 — commit
 
-If `.git/COMMIT_EDITMSG` exists and is non-empty (preflight wrote it) → use:
+If Pre-validated message is not `<none>`:
+- Use it: `git commit -F .git/COMMIT_EDITMSG`
+- Then `rm -f .git/COMMIT_EDITMSG` so it cannot leak into a later run.
+
+Else compose ONE Conventional Commit message in English from the staged diff:
+- `<type>(<scope>)?: <subject>` where subject is ≤ 72 chars, imperative mood, no trailing period.
+- Optional body wrapped at 100 chars only when the diff genuinely warrants context.
+- No `Co-Authored-By` footer unless explicitly requested.
+
+Commit via heredoc to preserve formatting:
 
 ```
-!git commit -F .git/COMMIT_EDITMSG
-```
-
-Then `!rm -f .git/COMMIT_EDITMSG` to avoid stale reuse.
-
-Else compose a Conventional Commit (English) from the staged diff and commit via heredoc:
-
-```
-!git commit -m "$(cat <<'EOF'
-<type>(<scope>?): <subject>
-
-<optional body wrapped at 100>
+git commit -m "$(cat <<'EOF'
+<message>
 EOF
 )"
 ```
 
-### Step 3 — Push
+### Step 3 — push
 
 ```
-!git push -u origin "$(git rev-parse --abbrev-ref HEAD)" 2>&1 | tail -10
+git push -u origin "$(git rev-parse --abbrev-ref HEAD)"
 ```
 
-If push fails (e.g., diverged), surface the failure and exit non-zero. Do not force-push.
+### Step 4 — open PR
 
-### Step 4 — Open PR
-
-Compose PR title = commit subject.
-
-PR body in **French**, three sections:
+Title = the commit subject. Body in **French**, three sections:
 
 ```
 ## Contexte
@@ -80,7 +76,6 @@ PR body in **French**, three sections:
 
 - <changement 1>
 - <changement 2>
-- ...
 
 ## Plan de test
 
@@ -91,33 +86,18 @@ PR body in **French**, three sections:
 Run via heredoc:
 
 ```
-!gh pr create --title "<title>" --body "$(cat <<'EOF'
-## Contexte
-...
-
-## Changements
-- ...
-
-## Plan de test
-- [ ] ...
+gh pr create --title "<title>" --body "$(cat <<'EOF'
+<body>
 EOF
 )"
 ```
 
-Capture the PR URL from gh's stdout (last line of output is the URL).
+The output of `gh pr create` is the PR URL on the last line — that is the only thing you emit to the user. Print it on its own line, no preamble.
 
-## Output
+### Hard rules
 
-Single line, no preamble:
-
-```
-<PR URL>
-```
-
-## Edge cases
-
-- gh not authenticated → exit non-zero with `gh auth required: run gh auth login.`.
-- Push to default branch attempted → step 1 prevented this; if somehow reached, refuse and exit non-zero.
-- `.git/COMMIT_EDITMSG` exists from a previous failed run → still use it (it represents the last validated message); always `rm -f` after consuming.
-- Pre-commit hook rejects → surface error, do NOT use `--no-verify`.
-- PR already exists for branch → gh fails with "already exists"; surface that URL by extracting it from gh's error message and exit 0.
+- **Never force-push.** No `--force`, no `--force-with-lease`. If `git push` fails with a diverged-history error, surface the error verbatim and stop. The user resolves manually.
+- **Never push to the default branch.** Step 1 prevents this; if you somehow find yourself on the default branch after step 1, stop and surface the failure.
+- **Never skip hooks.** No `--no-verify`, no `--no-gpg-sign`. If a pre-commit/pre-push hook fails, surface its output verbatim and stop.
+- **Do not invent PR URLs.** Only emit the URL `gh pr create` actually returned. If it failed with "a pull request for branch already exists", parse the existing URL out of the error and emit that instead.
+- **Single message.** You have the capability to call multiple tools in a single response. You MUST do steps 1-4 (whichever apply) in a single message. Do not use any other tools or do anything else. Do not send any other text or messages besides these tool calls and the final PR URL (or halt line).

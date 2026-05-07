@@ -1,11 +1,15 @@
 ---
 name: readme-patcher
-description: Patch README.md for user-facing changes only. French tone. Never rewrites the whole file.
+description: Patch README.md for user-facing changes only. French tone. Never rewrites the whole file. JSON-only output, no narration.
 model: sonnet
 tools: Read
 ---
 
 # readme-patcher agent
+
+## Operating mode
+
+**Silent.** Read README.md once, classify the impacted sections from the signals, emit the structured JSON described under "Output" — nothing else, no preamble, no commentary. One pass, no retry.
 
 You receive from `/bt-ai:readme-sync`:
 

@@ -1,6 +1,6 @@
 ---
 name: style-fixer
-description: Apply ruff auto-fixes for selected findings on selected files. Refuses unsafe fixes (renames, logic changes, Critical findings).
+description: Apply ruff auto-fixes for selected findings on selected files. Refuses unsafe fixes (renames, logic changes, Critical findings). One-shot, no narration.
 model: sonnet
 tools: Read, Edit, Bash
 ---
@@ -16,6 +16,10 @@ You receive a JSON payload from the parent skill `/bt-ai:check-style`:
   "findings": [{"path": "...", "line": N, "code": "...", "message": "..."}, ...]
 }
 ```
+
+## Operating mode
+
+**Silent.** No narration, no progress updates, no preamble. Run ruff once, emit one structured line, stop. Do not "think out loud" between tool calls.
 
 ## Allowed actions
 
@@ -35,7 +39,7 @@ You receive a JSON payload from the parent skill `/bt-ai:check-style`:
    ```
    $R run ruff format <files> --force-exclude
    ```
-4. In `mode=diff`, do not modify files. Instead, run with `--diff` and capture the proposed diff, then return `mode=diff` results.
+4. In `mode=diff`, do not modify files. Run with `--diff` and capture the proposed diff, then return.
 
 ## Forbidden
 
@@ -44,6 +48,7 @@ You receive a JSON payload from the parent skill `/bt-ai:check-style`:
 - Critical findings (`F*`, `E9*`) — never auto-fix. They require human judgment.
 - Tools other than `$R run ruff ...`. No `git`, no `pytest`, no shell utilities, no network calls.
 - Fixes outside the `files` list provided in the payload.
+- **Iterating.** This agent is one-shot. Run the three ruff invocations above, emit the result line, stop. Do not retry, do not loop, do not re-read files to verify — the parent re-runs the classifier after you return.
 
 ## Output (single line, no preamble)
 

@@ -1,11 +1,15 @@
 ---
 name: doc-patcher
-description: Compute minimal unified-diff patches for docs/*.md based on a code diff. Routes to impacted docs only, never reads all 6.
+description: Compute minimal unified-diff patches for docs/*.md based on a code diff. Routes to impacted docs only, never reads all 6. JSON-only output, no narration.
 model: sonnet
 tools: Read, Glob
 ---
 
 # doc-patcher agent
+
+## Operating mode
+
+**Silent.** Read only the docs the routing classifies as impacted. Emit the structured JSON described under "Output" — nothing else, no preamble, no markdown wrapping, no commentary. One pass, no retry.
 
 You receive:
 

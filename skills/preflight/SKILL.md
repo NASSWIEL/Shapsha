@@ -1,134 +1,84 @@
 ---
 name: preflight
-description: Pre-PR validation suite. Runs check-style, security, gen-tests, pytest, doc-sync, readme-sync, gitlint gate, then commit-push-pr.
+description: Pre-PR validation suite. Sequentially runs check-style, security, gen-tests, pytest, doc-sync, readme-sync, gitlint message gate, then commit-push-pr. Silent on the happy path.
 disable-model-invocation: true
-allowed-tools: Bash, Read, Glob
+allowed-tools: Bash(git status:*), Bash(git rev-parse:*), Bash(git diff:*), Bash(git branch:*), Bash(gh repo view:*), Bash(gh auth status:*), Bash(command:*), Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(cat:*), Bash(test:*), Skill, Read
 ---
 
 # /bt-ai:preflight
 
-Runner: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv`
-Repo state: !`git status --porcelain=v1`
-Branch: !`git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "<not-a-repo>"`
-Default branch: !`gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo "main"`
-gh present: !`command -v gh >/dev/null 2>&1 && echo "yes" || echo "no"`
-GH auth: !`gh auth status 2>&1 | head -1`
-GH auth ok: !`gh auth status >/dev/null 2>&1 && echo "yes" || echo "no"`
-Has staged: !`git diff --cached --quiet 2>/dev/null && echo "no" || echo "yes"`
-Has unstaged: !`git diff --quiet 2>/dev/null && echo "no" || echo "yes"`
+## Context
 
-## Operating mode
+- Repo state: !`git status --porcelain=v1`
+- Branch: !`git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "<not-a-repo>"`
+- Default branch: !`gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo main`
+- gh present: !`command -v gh >/dev/null 2>&1 && echo yes || echo no`
+- gh auth ok: !`gh auth status >/dev/null 2>&1 && echo yes || echo no`
+- Has staged: !`git diff --cached --quiet 2>/dev/null && echo no || echo yes`
+- Has unstaged: !`git diff --quiet 2>/dev/null && echo no || echo yes`
+- Runner: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv`
 
-**Sequential, halt-on-failure.** Each step either passes silently or halts with a one-line reason. Sub-skills run their own interactive prompts; their non-zero exits halt preflight.
+## Your task
 
-**Stage handoff between steps.** Each sub-skill `git add`s the files IT modifies on success (style fixes, applied security fixes, generated tests, applied doc patches, README patch). The user's original staged changes carry through, plus all preflight-generated work. By step 7 the staged tree reflects everything that should be in the commit. Preflight itself does not call `git add` — that responsibility lives in each sub-skill so the same staging happens whether the skill is invoked standalone or via preflight.
+Run the full pre-PR validation suite and open a PR. Sub-skills handle their own staging via `git add`; preflight never stages on the user's behalf. The only output on success is the PR URL.
 
-**Runner**: `R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv);` then `$R run <tool>`. Dispatches to `uv run` or `poetry run` as set by `/bt-ai:proj-init`.
+### Guards (halt before any work)
 
-## Logic
+1. Branch is `<not-a-repo>` → `Halted: not a git repository.` Stop.
+2. Both Has staged and Has unstaged are `no` → `Halted: no changes to validate.` Stop.
+3. Has unstaged is `yes` AND Has staged is `no` → `Halted: changes are unstaged. Stage them first (git add).` Stop. Never stage user changes silently.
+4. Branch equals Default branch → `Halted: refuse to preflight on the default branch. Create a feature branch first.` Stop.
+5. gh present is `no` → `Halted: gh CLI not installed. Install from https://cli.github.com and run 'gh auth login'. For a local-only flow use individual skills (/bt-ai:check-style, /bt-ai:security, /bt-ai:gen-tests, /bt-ai:doc-sync, /bt-ai:readme-sync, /bt-ai:commit).` Stop.
+6. gh auth ok is `no` → `Halted: gh not authenticated. Run 'gh auth login' and retry.` Stop.
 
-### Guard
+### Pipeline (sequential, halt on first failure)
 
-1. If branch shows `<not-a-repo>` → output `Halted at guard: not a git repository.` exit non-zero.
-2. If `Has staged` is `no` AND `Has unstaged` is `no` → output `Halted at guard: no changes to validate.` exit non-zero.
-3. If `Has unstaged` is `yes` AND `Has staged` is `no` → stage user changes? No — refuse and instruct: output `Halted at guard: changes are unstaged. Stage them first (git add).` exit non-zero. (Reason: preflight should not silently `git add` user changes; user controls staging.)
-4. **gh prerequisite check** — preflight ends at step 8 with `gh pr create`. Failing later wastes 5 minutes:
-   - If `gh present` is `no` → output `Halted at guard: gh CLI not installed. Preflight ends with PR creation. Install gh (https://cli.github.com) and run 'gh auth login'. For a local-only flow, run individual skills: /bt-ai:check-style, /bt-ai:security, /bt-ai:gen-tests, /bt-ai:doc-sync, /bt-ai:readme-sync, /bt-ai:commit.` exit non-zero.
-   - If `gh present` is `yes` AND `GH auth ok` is `no` → output `Halted at guard: gh not authenticated. Run 'gh auth login' and retry.` exit non-zero.
+Run each step in order. If a step exits non-zero, surface its message verbatim prefixed with `Halted at step <N>:` and stop. Do not narrate between steps.
 
-### Step 1 — check-style
+**Step 1 — check-style.** Invoke `bt-ai:check-style` via the Skill tool. Auto-applies safe ruff fixes; halts only on Critical (`F*`/`E9*`) findings.
 
-Invoke skill `bt-ai:check-style`. The skill itself handles user prompts for fix/skip on Critical+High findings.
+**Step 2 — security.** Invoke `bt-ai:security`. Halts only on HIGH/HIGH bandit findings.
 
-If the skill exits non-zero (i.e., Critical or High findings remain unresolved) → output `Halted at step 1: critical/high style findings unresolved.` exit non-zero.
+**Step 3 — gen-tests.** Invoke `bt-ai:gen-tests` (no arguments → diff mode). Generates tests for changed Python files. Halts on test-collection failure or unresolved semantic failures.
 
-### Step 2 — security
-
-Invoke skill `bt-ai:security`. Skill handles user prompts and FIXABLE/BLOCKED classification.
-
-If non-zero exit (BLOCKED findings remain or user skipped FIXABLE-and-now-blocked) → output `Halted at step 2: security findings require manual fix.` exit non-zero.
-
-### Step 3 — gen-tests (diff mode)
-
-Invoke skill `bt-ai:gen-tests` (no arguments → diff mode).
-
-If non-zero (subagent failure or pytest collection failure on generated tests) → output `Halted at step 3: gen-tests failed.` followed by the skill's error verbatim. Exit non-zero.
-
-If zero exit, continue. "All changed files already have tests" is a valid pass.
-
-### Step 4 — pytest
+**Step 4 — full pytest.** Run the project's full test suite (not just the freshly generated tests):
 
 ```
-!R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run pytest -q 2>&1 | tail -30
+R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run pytest -q 2>&1 | tail -30
 ```
 
-If exit non-zero → output `Halted at step 4: pytest failed.` followed by the captured tail. Exit non-zero.
+If the exit code is non-zero, output `Halted at step 4: pytest failed.` followed by the captured tail. Stop.
 
-### Step 5 — doc-sync
+**Step 5 — doc-sync.** Invoke `bt-ai:doc-sync`. Auto-applies clean patches; halts only on apply failure.
 
-Invoke skill `bt-ai:doc-sync`. Skill handles user prompts for `[a]/[s]/[n]`.
+**Step 6 — readme-sync.** Invoke `bt-ai:readme-sync`. Auto-applies clean patch.
 
-If non-zero exit (user declined patches OR a patch failed to apply) → output `Halted at step 5: docs out of sync.` exit non-zero.
+**Step 7 — commit message gate.** The staged tree now contains the user's original changes plus everything the sub-skills produced. Compose a Conventional Commit message from the staged diff:
 
-If zero exit, continue. "No doc updates needed" is a valid pass.
-
-### Step 6 — readme-sync
-
-Invoke skill `bt-ai:readme-sync`. Skill handles user prompts.
-
-If non-zero → output `Halted at step 6: README out of sync.` exit non-zero.
-
-### Step 7 — commit message gate
-
-1. The staged tree at this point holds: (a) everything the user staged before invoking preflight, plus (b) all auto-fixes / generated tests / doc patches / README patch produced by steps 1-6 (each sub-skill staged its own outputs). Preflight does NOT call `git add` here — anything still unstaged at this point is intentionally outside the commit (e.g., the user has unrelated WIP).
-2. Compose a Conventional Commit message (English) from the staged diff:
-
-   ```
-   !git diff --cached --stat
-   !git diff --cached
-   ```
-
-   Build the message in memory: `<type>(<scope>?): <subject>` plus optional body.
+1. Read the staged diff (already in Context above; if stale, re-read with `git diff --cached --stat` and `git diff --cached`).
+2. Build the message in memory: `<type>(<scope>?): <subject>` plus optional body, English, subject ≤ 72 chars, imperative.
 3. Validate via gitlint:
-
    ```
-   !R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); echo "<message>" | $R run gitlint --staged --msg-stdin 2>&1
+   echo "<message>" | $R run gitlint --staged --msg-stdin
    ```
-
-   Exit code 0 = valid. Non-zero = rule violation; gitlint prints the rule that failed.
-
-4. **On failure**: print the gitlint output verbatim. Use AskUserQuestion to ask the user to provide a corrected message (single text field). Re-validate.
-
-5. **On second failure**: output `Halted at step 7: commit message did not pass gitlint after rewrite.` exit non-zero.
-
-6. **On success**: write the validated message to `.git/COMMIT_EDITMSG`:
-
+4. If gitlint exits non-zero, the user's repo `.gitlint` is rejecting the message. Re-write once based on the rule that fired (gitlint prints which one). If the second attempt also fails, output `Halted at step 7: commit message did not pass gitlint after rewrite.` followed by gitlint's output verbatim. Stop.
+5. On success, write the validated message to `.git/COMMIT_EDITMSG`:
    ```
-   !cat > .git/COMMIT_EDITMSG <<'EOF'
+   cat > .git/COMMIT_EDITMSG <<'EOF'
    <validated message>
    EOF
    ```
 
-### Step 8 — commit, push, PR
+**Step 8 — commit-push-pr.** Invoke `bt-ai:commit-push-pr` via the Skill tool. It detects the non-empty `.git/COMMIT_EDITMSG` and uses `git commit -F`, then removes the file. The output is the PR URL on a single line.
 
-Invoke slash command `/bt-ai:commit-push-pr`. It will detect the non-empty `.git/COMMIT_EDITMSG` and use it via `git commit -F`, then `rm -f` it.
+If step 8 exits non-zero, output `Halted at step 8: commit-push-pr failed.` followed by its stderr. Stop. The `.git/COMMIT_EDITMSG` may remain — `commit-push-pr` clears it on success only.
 
-If non-zero exit → output `Halted at step 8: commit-push-pr failed.` followed by the skill's stderr. Exit non-zero. The `.git/COMMIT_EDITMSG` may remain — `commit-push-pr` clears it on success only.
+### Hard rules
 
-## Output
+- **Never narrate intermediate steps** ("Step 1 starting…", "check-style passed…"). The only output is the final PR URL or the halt line.
+- **Never stage user changes silently.** Sub-skills stage what THEY produce; preflight does not call `git add`.
+- **Never force-push.** Never push to the default branch (the guard above prevents preflight on the default branch; if a sub-skill somehow ends up pushing to it, halt).
+- **Never skip hooks.** No `--no-verify`, no `--no-gpg-sign`. If a hook fails, halt with the hook's message verbatim.
+- **Never invent a PR URL.** Only emit the URL `gh pr create` actually returned.
 
-On success: the PR URL (passed through from `commit-push-pr`).
-
-On halt: single line `Halted at step <N>: <reason>.` followed by the failure detail (verbatim from the failing tool).
-
-No preamble. No "Step 1 starting..." narration between steps.
-
-## Edge cases
-
-- Step 1-6 user picks `[n]` (skip) on a sub-skill prompt → that skill exits non-zero → preflight halts at that step. This is correct: declining means changes are unresolved.
-- `.git/COMMIT_EDITMSG` already exists (stale from prior run) → we overwrite at step 7; commit-push-pr clears it after consumption.
-- Step 4 pytest collection passes but tests fail → halt at step 4 with full failure tail.
-- gh missing or unauthenticated → caught at guard step 4, never reaches step 8.
-- User on default branch → step 8 (commit-push-pr) creates a `<type>/<slug>` branch automatically.
-- All steps pass but user has nothing committed (impossible given guards) → fail-safe error at step 8.
-- Step 7 user provides empty corrected message → treat as second failure and halt.
+You have the capability to call multiple tools in a single response. Use the Skill tool to invoke each sub-skill, and Bash for steps 4 and 7. Do not send any other text or messages besides these tool calls and the final PR URL (or halt line).

@@ -1,8 +1,8 @@
 {
   "$schema": "https://www.schemastore.org/claude-code-plugin-manifest.json",
   "name": "bt-ai",
-  "version": "0.0.0",
-  "description": "Standardise les pratiques Python d'equipe : style, securite, tests, doc, pre-commit, init projet.",
+  "version": "0.1.0",
+  "description": "Standardise les pratiques Python d'equipe : style, securite, tests, doc, pre-commit, init projet. Execution silencieuse par defaut, prompt-driven.",
   "author": {
     "name": "shapsha-lemans",
     "email": "shapsha-lemans@cgi.com"

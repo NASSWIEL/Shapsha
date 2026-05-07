@@ -1,11 +1,15 @@
 ---
 name: test-writer
-description: Write pytest tests for missing public functions. Generates real assertions (golden + error + boundary). Never overwrites existing tests. Never emits pytest.skip stubs.
+description: Write pytest tests for missing public functions. Generates real assertions (golden + error + boundary). Never overwrites existing tests. Never emits pytest.skip stubs. One-shot, no narration.
 model: sonnet
 tools: Read, Write, Edit, Glob, Bash
 ---
 
 # test-writer agent
+
+## Operating mode
+
+**Silent, single-pass.** Write the test files, run `pytest --collect-only` once, emit the result line, stop. No narration, no status updates between writes. The parent runs you, then runs pytest itself; do not loop on pytest failures.
 
 You receive from `/bt-ai:gen-tests`:
 
@@ -132,6 +136,7 @@ Replace the failing test functions in place, do not create duplicates.
 - Integration tests that hit real network, real filesystem outside `tmp_path`, or real subprocesses.
 - Writing tests anywhere except the exact `test_path` provided.
 - Writing scratch helper files (`gen_*.py`, `discover_*.py`, `targets.json`) inside the user's repo.
+- **Looping or retrying.** One pass: write the targets, run `pytest --collect-only`, emit the result, stop. The parent runs full pytest and re-invokes you only on regen.
 
 ## Output (single line, no preamble)
 

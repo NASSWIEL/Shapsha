@@ -1,132 +1,73 @@
 ---
 name: security
-description: Scan changed Python files with bandit. Print findings >= MEDIUM severity AND >= MEDIUM confidence. Refuse auto-fix on dangerous categories.
+description: Scan changed Python files with bandit. Print findings >= MEDIUM severity AND >= MEDIUM confidence. Halts only on HIGH/HIGH; MEDIUM is advisory.
 disable-model-invocation: true
-allowed-tools: Bash, Read, Glob
+allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git rev-parse:*)
 ---
 
 # /bt-ai:security
 
-Argument: $ARGUMENTS
-Runner: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv`
-Changed Python files: !`{ git diff --name-only --diff-filter=ACMR -- '*.py' 2>/dev/null; git diff --cached --name-only --diff-filter=ACMR -- '*.py' 2>/dev/null; git ls-files --others --exclude-standard -- '*.py' 2>/dev/null; } | sort -u | tr '\n' ' '`
-All Python files (only used if $ARGUMENTS == "all"): !`git ls-files -- '*.py' 2>/dev/null | tr '\n' ' '`
-Bandit version: !`R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv); $R run bandit --version 2>&1 | head -1 || echo "bandit: NOT INSTALLED"`
+## Context
 
-## Argument
+- Argument: $ARGUMENTS
+- Runner: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv`
+- Changed Python files: !`{ git diff --name-only --diff-filter=ACMR -- '*.py' 2>/dev/null; git diff --cached --name-only --diff-filter=ACMR -- '*.py' 2>/dev/null; git ls-files --others --exclude-standard -- '*.py' 2>/dev/null; } | sort -u | tr '\n' ' '`
+- All Python files (only used if $ARGUMENTS == "all"): !`git ls-files -- '*.py' 2>/dev/null | tr '\n' ' '`
+- Bandit version: !`R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv); $R run bandit --version 2>&1 | head -1 || echo "bandit: NOT INSTALLED"`
 
-| Argument | Behavior |
-|---|---|
-| (none)  | Scan changed files only (default) |
-| `all`   | Scan **every** tracked `.py` file in the repo |
-| anything else | Output `Unknown argument: <token>. Accepts no argument or 'all'.` and exit non-zero |
+## Your task
 
-## Operating mode
+Run bandit on the changed (or `all`) Python files, classify findings, and emit a single summary line. Surface HIGH-severity HIGH-confidence findings as halts; everything below is advisory.
 
-**Silent.** Run bandit via `!`, pipe JSON into the bundled classifier, emit only the final summary and any AskUserQuestion required.
+### Guards
 
-**Hermetic — never write into the user's repo.** All helper logic lives in `${CLAUDE_PLUGIN_ROOT}/tools/`. Do not write `classify_*.py`, scratch JSON, log files, or any file that is not the actual user fix.
+1. `$ARGUMENTS` non-empty AND not exactly `all` → output `Unknown argument: <token>. Accepts no argument or 'all'.` Stop.
+2. `bandit: NOT INSTALLED` → output `bandit not installed. Run /bt-ai:proj-init.` Stop.
+3. Target list (resolved per `$ARGUMENTS`) is empty → output `No .py files to scan.` Stop with success.
 
-**Runner**: `R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv);` then `$R run bandit`.
-
-## Logic
-
-### Pre-flight
-
-1. If `$ARGUMENTS` non-empty AND not exactly `all` → output `Unknown argument: <token>. Accepts no argument or 'all'.` exit non-zero.
-2. Decide target list (changed vs all) per `$ARGUMENTS`.
-3. If target list empty → `No .py files to scan.` exit 0.
-4. If `bandit: NOT INSTALLED` → `bandit not installed. Run /bt-ai:proj-init.` exit non-zero.
-5. If not in a git repo (changed-files path only) → `Not a git repository.` exit non-zero.
-
-### Scan + classify
+### Scan and classify
 
 Pipe bandit JSON straight into the bundled classifier:
 
 ```
-!R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run bandit -f json -ll -ii <files> 2>/dev/null | python "${CLAUDE_PLUGIN_ROOT}/tools/classify_bandit.py"
+R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run bandit -f json -ll -ii <files> 2>/dev/null | python "${CLAUDE_PLUGIN_ROOT}/tools/classify_bandit.py"
 ```
 
-`-ll` filters severity to >= MEDIUM, `-ii` confidence to >= MEDIUM. The classifier emits:
+`-ll` filters severity to >= MEDIUM, `-ii` confidence to >= MEDIUM. The classifier prints:
 
 ```
 summary blocked=N fixable=N total=N
 [<sev>/<conf>] [BLOCKED|FIXABLE] <path>:<line> <code> <message>
 ```
 
-The classifier's BLOCKED set mirrors the table below — keep them in lockstep.
+### Halt criterion
 
-### BLOCKED set (no auto-fix; human-only)
+The Halt rule is narrow on purpose: bandit auto-fix is dangerous (suppressing warnings silently), so this skill is **report-only** with one halt level.
 
-Dangerous-execution (mechanically rewriting masks intent):
-- `B102` exec, `B307` eval, `B301` pickle, `B324` insecure hash (md5/sha1)
-- `B501`-`B508` (cryptography family)
-- `B602`-`B608` (subprocess / shell)
-- `B610`, `B611` (SQL injection)
-- `B701` jinja2 autoescape
+- **Halt** when ANY finding is `HIGH` severity AND `HIGH` confidence. These are bandit's strongest signals — exec, eval, pickle on untrusted data, hardcoded crypto keys, shell injection.
+- **Advisory** for MEDIUM/MEDIUM, MEDIUM/HIGH, HIGH/MEDIUM. The classifier already printed them. They do not halt the suite; the user reads them and acts in a follow-up commit if needed.
 
-Context-sensitive (intentional vs accidental depends on deployment):
-- `B104` bind to 0.0.0.0 (intentional in containers — also skipped at the bandit-config level via `[tool.bandit].skips`)
-- `B105`-`B107` hardcoded password heuristics (high false-positive rate)
-- `B108` hardcoded `/tmp` usage
-
-Everything else → FIXABLE (most still report-only — see security-fixer agent).
-
-### Branch
-
-- **No findings** → `No security findings >= MEDIUM/MEDIUM.` exit 0.
-- **All findings BLOCKED** → `<N> findings require manual fix.` skip AskUserQuestion. Exit non-zero.
-- **At least one FIXABLE** → ask.
-
-### Ask user
-
-AskUserQuestion (one prompt, three options):
-
-- `a` — Auto-fix the FIXABLE ones (delegates to `security-fixer`)
-- `s` — Show diffs first (`security-fixer` in `mode=diff`, then re-ask `apply / cancel`)
-- `n` — Skip
-
-### Delegate to security-fixer
-
-Invoke `Task` with agent `security-fixer`. Pass JSON:
-
-```json
-{
-  "mode": "apply" | "diff",
-  "findings": [
-    {"path": "...", "line": N, "code": "B101", "severity": "MEDIUM", "confidence": "HIGH", "message": "..."},
-    ...
-  ]
-}
-```
-
-Forward only FIXABLE findings; never forward BLOCKED ones (the agent has its own refusal list as defense in depth).
-
-Wait for agent's line: `fixed=N reported=M refused=K`.
-
-After a successful `mode=apply` (fixed > 0), stage the agent's edits so preflight and follow-up commits see them:
+To detect HIGH/HIGH, re-pipe bandit with stricter flags:
 
 ```
-!for f in <distinct paths from forwarded findings>; do git diff --quiet -- "$f" 2>/dev/null || git add -- "$f"; done
+R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run bandit -f json -lll -iii <files> 2>/dev/null | python -c "import sys,json; raw=sys.stdin.read(); print(len(json.loads(raw or '{}').get('results',[])) if raw.strip() else 0)"
 ```
 
-(Use `git diff --quiet` per file to skip ones the agent reported-only on.)
-
-## Output
-
-Single line, no preamble:
-
+If the count is `0` → output:
 ```
-<fixed> fixed, <blocked> require manual fix.
+Security: <total> advisory finding(s). No HIGH/HIGH blocks.
 ```
+Stop with success.
 
-Exit codes: 0 if `blocked == 0`, non-zero otherwise.
+If the count is `> 0` → output:
+```
+Halted: <count> HIGH/HIGH security finding(s) require manual review.
+```
+Stop with non-zero exit.
 
-## Edge cases
+### Hard rules
 
-- Bandit JSON malformed → print stderr verbatim, exit non-zero.
-- Bandit `[tool.bandit]` config errors → re-run without config: `!$R run bandit -f json -ll -ii --configfile /dev/null <files>`.
-- All findings BLOCKED → no AskUserQuestion shown.
-- User picks `n` → exit 0 (the user chose not to act; that is not an error).
-- Findings touch a file already removed from disk → bandit will skip; ignore.
-- pyproject.toml absent → bandit uses defaults.
+- **No auto-fix.** Mechanically silencing a security warning is dangerous. This skill never edits user code.
+- **No AskUserQuestion.** Halt or pass; the user does not need a prompt to read a printed list.
+- **Hermetic.** No scratch files in the user's repo.
+- **Single message.** Do classify + summary in one tool-call turn. Do not narrate.
