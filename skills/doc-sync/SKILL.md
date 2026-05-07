@@ -1,8 +1,8 @@
 ---
 name: doc-sync
-description: Synchronise les docs FR dans docs/ avec les changements de code (git diff). Remplit les placeholders {{...}} au premier passage. Applique les patches propres ; s'arrête si un patch échoue.
+description: Synchronise les docs FR dans docs/ avec les changements de code (git diff). Remplit les placeholders {{...}} au premier passage. L'agent édite en place ; ce skill ne fait que stager.
 disable-model-invocation: true
-allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git add:*), Bash(git rev-parse:*), Bash(cat:*), Bash(grep:*), Read, Glob, Edit
+allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git add:*), Bash(git status:*), Bash(git rev-parse:*), Bash(grep:*), Bash(test:*), Read, Glob
 ---
 
 # /bt-ai:doc-sync
@@ -13,16 +13,18 @@ allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git 
 - Untracked files: !`git ls-files --others --exclude-standard -- '*.py' 'pyproject.toml' '*.md' 2>/dev/null | head -20`
 - Diff (capped at 500 lines, includes untracked as new-file hunks): !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --include-untracked --cap 500 '*.py' 'pyproject.toml' 2>/dev/null`
 - Docs with placeholders (template-fill candidates): !`grep -l -E '\{\{[^}]+\}\}|À compléter|Phrase unique' docs/*.md 2>/dev/null || true`
+- docs/ exists: !`test -d docs && echo yes || echo no`
 
 ## Your task
 
-Detect impacted French docs from the code diff, compute minimal unified-diff patches via the `doc-patcher` subagent, and auto-apply clean ones. Halt only when a patch fails to apply.
+Delegate to the `doc-patcher` subagent, which edits docs in place. This skill never applies diffs and never edits docs itself — it only delegates and stages.
 
 ### Guards
 
-1. `docs/` folder is absent → output `docs/ folder absent. Run /bt-ai:proj-init first.` Stop.
+1. `docs/ exists` is `no` → output `docs/ folder absent. Run /bt-ai:proj-init first.` Stop.
 2. Diff stat is empty AND "Docs with placeholders" is empty → output `No code changes detected. Docs unchanged.` Stop with success.
-3. Diff stat is empty BUT "Docs with placeholders" is non-empty → enter **template-fill mode**: docs were freshly bootstrapped and have never been authored. Continue to delegation; the agent fills placeholders from code instead of from the diff.
+
+If diff stat is empty BUT placeholder docs exist, that's **template-fill mode** (first authoring after proj-init). Continue.
 
 ### Delegate to doc-patcher
 
@@ -30,7 +32,7 @@ Invoke `Task` with subagent `doc-patcher`. Pass JSON:
 
 ```json
 {
-  "diff": "<full text from above, capped at 500 lines>",
+  "diff": "<full diff text from Context above>",
   "docs_path": "docs/",
   "placeholder_docs": ["<paths from 'Docs with placeholders' line, or empty list>"],
   "routing": {
@@ -44,45 +46,37 @@ Invoke `Task` with subagent `doc-patcher`. Pass JSON:
 }
 ```
 
-Wait for the agent's structured JSON return:
+The agent edits docs in place via `Edit`/`MultiEdit` and returns:
 
 ```json
 {
-  "patches": [{"file": "docs/data-model.md", "patch": "<unified diff>", "summary": "..."}],
-  "skipped": [{"file": "docs/architecture.md", "reason": "drift too large; needs human"}]
+  "patched": ["docs/data-model.md", "docs/index.md"],
+  "skipped": [{"file": "docs/architecture.md", "reason": "drift too large; needs human"}],
+  "summary": "Added entity Foo with fields a, b, c."
 }
 ```
 
-### Apply
+### Stage and summarize
 
-- `patches` empty AND `skipped` empty → output `No doc updates needed.` Stop with success.
-- Otherwise, for each patch entry: use `Edit` to apply the unified diff. If a hunk does not apply cleanly, output:
-  ```
-  Halted: patch failed for <file>:
-  <patch text>
-  ```
-  Stop with non-zero exit. The user merges manually.
-- After all successful patches:
-  ```
-  for f in <successfully patched files>; do git add -- "$f"; done
-  ```
+For each file in `patched`:
 
-### Output
-
-Single line summary. If `skipped` is empty:
 ```
-Patched N docs: <comma-list>.
+git add -- "<file>"
 ```
 
-If `skipped` is non-empty:
-```
-Patched N docs: <list>. Skipped M: <comma-list of reasons>.
-```
+Then output a single line:
 
-If nothing was patched (all skipped) → `No doc updates needed. M skipped: <reasons>.`
+- `patched` empty AND `skipped` empty → `No doc updates needed.`
+- `skipped` empty → `Patched N docs: <comma-list>.`
+- `skipped` non-empty → `Patched N docs: <list>. Skipped M: <comma-list of reasons>.`
+- `patched` empty AND `skipped` non-empty → `No doc updates applied. M skipped: <reasons>.`
+
+Stop with success unless the agent itself reported a halt condition.
 
 ### Hard rules
 
-- **No AskUserQuestion.** Apply or halt. The user reviews via `git diff` before commit.
-- **Subagent has its own context.** It reads only the routed docs; do not echo doc content into this skill's prompt.
-- **Single message.** Delegate + apply + stage in one tool-call turn per phase.
+- **Do not edit docs yourself.** The agent owns all doc edits. This skill only stages.
+- **Do not parse or apply unified diffs.** The old contract (subagent returns diffs, parent applies) is gone. The agent edits in place via Edit/MultiEdit.
+- **Do not write helper scripts** into the user's repo. If anything fails, surface the agent's reason verbatim.
+- **No AskUserQuestion.** The user reviews via `git diff` before commit.
+- **Single message.** Delegate + stage + summary in one tool-call turn.
