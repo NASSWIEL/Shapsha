@@ -1,6 +1,6 @@
 ---
 name: check-style
-description: Lint des fichiers Python modifiés avec ruff. Applique les corrections sûres en silence. S'arrête uniquement sur les findings critiques (F*, E9*).
+description: "Lint des fichiers Python modifiés avec ruff. Affiche tous les findings clairement. S'arrête sur les critiques (F*, E9*) avec leur liste complète. Demande consentement avant d'appliquer les fixes non-critiques."
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git status:*), Bash(git rev-parse:*)
 ---
@@ -17,7 +17,7 @@ allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash
 
 ## Your task
 
-Run ruff on the changed Python files (or `all` files if `$ARGUMENTS == "all"`), auto-apply safe fixes silently, and emit a single summary line. Halt only when Critical findings remain — Critical means a human must read the code, not a regex.
+Run ruff on the changed Python files (or `all` files if `$ARGUMENTS == "all"`), display findings as observations, halt with the **full list** of Critical findings if any, otherwise **ask consent** before applying fixes for non-critical findings.
 
 ### Guards
 
@@ -27,41 +27,104 @@ Run ruff on the changed Python files (or `all` files if `$ARGUMENTS == "all"`), 
 
 ### Lint and classify
 
-Replace `<runner>` below with the literal Runner value from the Context above (`uv` or `poetry`). Run ruff with JSON output:
+Replace `<runner>` below with the literal Runner value from the Context above (`uv` or `poetry`). Run ruff with JSON output. **Append `|| true`** so ruff's exit code 1 (which only means "findings exist") does not surface as a scary error in the user's terminal:
 
 ```
-<runner> run ruff check <files> --force-exclude --output-format=json --no-fix 2>/dev/null
+<runner> run ruff check <files> --force-exclude --output-format=json --no-fix 2>/dev/null || true
 ```
 
 `--force-exclude` is required so `[tool.ruff].extend-exclude` (set by `proj-init`) applies even when files are passed explicitly.
 
-The output is a JSON array. Each finding has fields `code`, `filename`, `location.row`, `message`. Read the JSON and classify each finding by its `code` prefix, printing one line per Critical/High finding to stdout:
+The output is a JSON array. Each finding has fields `code`, `filename`, `location.row`, `message`. Read the JSON in memory and classify each finding by its `code` prefix into three buckets:
 
-| Bucket | Prefixes | Action |
+| Bucket | Prefixes / matches | Routing |
 |---|---|---|
-| **Critical** | `F`, `E9` | Print `[CRITICAL] <filename>:<row> <code> <message>`. Will halt. |
-| **High** | `B`, `S` | If `code` is in `{B007, B009, B010, B011}` OR (`code == "S101"` AND `filename` contains `tests/`) → save for safe auto-fix below. Otherwise print `[HIGH] <filename>:<row> <code> <message>`; counts toward `high_remaining`. |
-| **Low** | `E` (not `E9`), `W`, `D`, `I`, `UP` | Save for silent auto-fix below. |
-| **Medium** | `N`, `C`, `PL` | Ignore silently. |
+| **`critical[]`** | `F*`, `E9*` | Will halt with full listing — never auto-fixed (real bugs need human review). |
+| **`safe_fixable[]`** | `E` (not `E9`), `W`, `D`, `I`, `UP`, **plus** `B007`/`B009`/`B010`/`B011`, **plus** `S101` only when `filename` contains `tests/` | Eligible for auto-fix with user consent. |
+| **`advisory[]`** | All other `B*`, `S*` outside the safe whitelist | Reported only — no automatic fix path; user must address manually. |
 
-Codes that match no prefix above → ignore.
+Codes that match no prefix above (`N*`, `C*`, `PL*`, etc.) → ignore silently.
 
-Track three counters: `critical_count`, `high_remaining`, `total_fixed` (Low + safe-High that will be auto-fixed).
+Do **not** print per-finding lines yet. Hold the buckets in memory and branch below.
 
-### Auto-apply (silent)
+### Branch 1 — Critical findings present
 
-If any Low or safe-High findings were classified, run these in order. They produce no narration:
-
-```
-<runner> run ruff check <files> --force-exclude --fix --select=E,W,D,I,UP --silent 2>/dev/null
-<runner> run ruff check <files> --force-exclude --fix --unsafe-fixes --select=B007,B009,B010,B011 --silent 2>/dev/null
-<runner> run ruff format <files> --force-exclude 2>/dev/null
-```
-
-If any safe-High finding was `S101` in a `tests/` file, also run:
+If `len(critical) > 0`, output the full list and halt. **No question, no auto-fix** — Critical findings are real bugs (undefined names, syntax errors, etc.) that require a human to read the code:
 
 ```
-<runner> run ruff check <files> --force-exclude --fix --unsafe-fixes --select=S101 --silent 2>/dev/null
+Halted: <N> critical style finding(s) require human review:
+  - <filename>:<row> <code> <message>
+  - <filename>:<row> <code> <message>
+  ...
+```
+
+Stop with non-zero exit so preflight halts.
+
+### Branch 2 — No findings at all
+
+If `len(critical) == 0` AND `len(safe_fixable) == 0` AND `len(advisory) == 0`:
+
+```
+Style: no findings.
+```
+
+Stop with success.
+
+### Branch 3 — Only advisory (no fixable, no critical)
+
+If `len(critical) == 0` AND `len(safe_fixable) == 0` AND `len(advisory) > 0`:
+
+Print the advisory list as observations (not directives), then stop with success — there is nothing to ask, the user must address them by hand.
+
+```
+Style: <N> non-critical finding(s) noted (no automatic fix available):
+  - <filename>:<row> <code> <message>
+  ...
+```
+
+### Branch 4 — Fixable findings present (with optional advisory)
+
+If `len(critical) == 0` AND `len(safe_fixable) > 0`:
+
+1. Print the combined non-critical list as observations:
+   ```
+   Found <K> non-critical style finding(s):
+     - <filename>:<row> <code> <message>     [from safe_fixable]
+     - <filename>:<row> <code> <message>     [from advisory]
+     ...
+   ```
+   List `safe_fixable[]` first, then `advisory[]`. Each line is just the finding — no imperative phrasing on the skill's part.
+
+2. Use the `AskUserQuestion` tool with one question:
+   - **header**: `Style fixes`
+   - **question**: `Do you want me to fix these issues that are not critical?`
+   - **multiSelect**: `false`
+   - **options**:
+     - label `Yes`, description `Apply ruff auto-fixes for the safe non-critical findings`
+     - label `No`, description `Skip auto-fix; leave the code as-is`
+
+3. On `No`:
+   ```
+   Style: <K> non-critical finding(s) noted, no fixes applied.
+   ```
+   Stop with success.
+
+4. On `Yes` → run the auto-fix sequence below.
+
+### Auto-fix (only after `Yes` consent)
+
+Run in order; each command appends `|| true` so non-zero from "fixes applied" does not surface as an error:
+
+```
+<runner> run ruff check <files> --force-exclude --fix --select=E,W,D,I,UP --silent 2>/dev/null || true
+<runner> run ruff check <files> --force-exclude --fix --unsafe-fixes --select=B007,B009,B010,B011 --silent 2>/dev/null || true
+<runner> run ruff format <files> --force-exclude 2>/dev/null || true
+```
+
+If any item in `safe_fixable[]` had `code == "S101"` AND its filename contains `tests/`, also run:
+
+```
+<runner> run ruff check <files> --force-exclude --fix --unsafe-fixes --select=S101 --silent 2>/dev/null || true
 ```
 
 Stage only files actually modified (skip untouched files to avoid grabbing unrelated user edits):
@@ -70,23 +133,21 @@ Stage only files actually modified (skip untouched files to avoid grabbing unrel
 for f in <files>; do git diff --quiet -- "$f" 2>/dev/null || git add -- "$f"; done
 ```
 
-### Branch on Critical
+### Final summary (post-fix)
 
-- `critical_count == 0` → output one line:
-  ```
-  Style: <total_fixed> auto-fixed, <high_remaining> high findings remain.
-  ```
-  Stop with success. The High findings outside the safe whitelist were already printed; they are advisory and do not halt the suite.
+```
+Style: <fixed_count> auto-fixed, <advisory_count> advisory finding(s) remain.
+```
 
-- `critical_count > 0` → the per-finding `[CRITICAL]` lines were already printed during classification. Output one final line:
-  ```
-  Halted: <critical_count> critical style findings require human review.
-  ```
-  Stop with non-zero exit so preflight halts.
+`fixed_count` = `len(safe_fixable)` (those were targeted by ruff --fix). `advisory_count` = `len(advisory)` (those were never in the auto-fix path).
+
+Stop with success.
 
 ### Hard rules
 
-- **No AskUserQuestion.** This skill never blocks the user with prompts. Auto-fix or halt.
+- **Halt on Critical = list, never ask.** Critical findings (`F*`, `E9*`) are real bugs; never offer to "fix" them. Always print the full list before halting.
+- **Consent before edits.** For non-critical findings, `AskUserQuestion` once before any auto-fix. The user controls when their code is touched.
+- **No imperative phrasing.** When listing findings, present them as observations (`<filename>:<row> <code> <message>`). The skill itself never tells the user "remove X" — that's ruff's job inside its own `<message>` field.
+- **`|| true` on ruff commands.** Ruff exits 1 when findings exist; the user must not see "Exit code 1" framed as an error.
 - **Never edit files manually** via `Edit`. All fixes come from ruff.
 - **Hermetic.** Never write classifier scripts, scratch JSON, or log files into the user's repo. The model classifies ruff's JSON output directly.
-- **Single message.** Call all required tools in one response. Do not narrate between tool calls; print the per-finding lines and the final summary line only.

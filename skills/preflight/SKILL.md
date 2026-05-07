@@ -27,17 +27,18 @@ Run the full pre-PR validation suite and open a PR. Sub-skills handle their own 
 1. Branch is `<not-a-repo>` → `Halted: not a git repository.` Stop.
 2. Both Has staged and Has unstaged are `no` → `Halted: no changes to validate.` Stop.
 3. Has unstaged is `yes` AND Has staged is `no` → `Halted: changes are unstaged. Stage them first (git add).` Stop. Never stage user changes silently.
-4. Branch equals Default branch → `Halted: refuse to preflight on the default branch. Create a feature branch first.` Stop.
-5. gh present is `no` → `Halted: gh CLI not installed. Install from https://cli.github.com and run 'gh auth login'. For a local-only flow use individual skills (/bt-ai:check-style, /bt-ai:security, /bt-ai:gen-tests, /bt-ai:doc-sync, /bt-ai:readme-sync, /bt-ai:commit).` Stop.
-6. gh auth ok is `no` → `Halted: gh not authenticated. Run 'gh auth login' and retry.` Stop.
+4. gh present is `no` → `Halted: gh CLI not installed. Install from https://cli.github.com and run 'gh auth login'. For a local-only flow use individual skills (/bt-ai:check-style, /bt-ai:security, /bt-ai:gen-tests, /bt-ai:doc-sync, /bt-ai:readme-sync, /bt-ai:commit).` Stop.
+5. gh auth ok is `no` → `Halted: gh not authenticated. Run 'gh auth login' and retry.` Stop.
+
+**Branch on default branch**: if `Branch` equals `Default branch`, **do not halt**. The Step 8 sub-skill (`bt-ai:commit-push-pr`) auto-creates a feature branch named from the staged diff (Conventional Commit type + ≤5-word slug). Continue to the pipeline as usual.
 
 ### Pipeline (sequential, halt on first failure)
 
 Run each step in order. If a step exits non-zero, surface its message verbatim prefixed with `Halted at step <N>:` and stop. Do not narrate between steps.
 
-**Step 1 — check-style.** Invoke `bt-ai:check-style` via the Skill tool. Auto-applies safe ruff fixes; halts only on Critical (`F*`/`E9*`) findings.
+**Step 1 — check-style.** Invoke `bt-ai:check-style` via the Skill tool. Asks consent before applying safe ruff fixes; halts on Critical (`F*`/`E9*`) findings with their full list.
 
-**Step 2 — security.** Invoke `bt-ai:security`. Halts only on HIGH/HIGH bandit findings.
+**Step 2 — security.** Invoke `bt-ai:security`. For HIGH/HIGH bandit findings, proposes concrete fixes and asks consent once for all. Halts on user decline or if HIGH/HIGH remain after fixes.
 
 **Step 3 — gen-tests.** Invoke `bt-ai:gen-tests` (no arguments → diff mode). Generates tests for changed Python files. Halts on test-collection failure or unresolved semantic failures.
 
@@ -77,7 +78,7 @@ If step 8 exits non-zero, output `Halted at step 8: commit-push-pr failed.` foll
 
 - **Never narrate intermediate steps** ("Step 1 starting…", "check-style passed…"). The only output is the final PR URL or the halt line.
 - **Never stage user changes silently.** Sub-skills stage what THEY produce; preflight does not call `git add`.
-- **Never force-push.** Never push to the default branch (the guard above prevents preflight on the default branch; if a sub-skill somehow ends up pushing to it, halt).
+- **Never force-push.** Never push to the default branch. If preflight starts on the default branch, `commit-push-pr` Step 1 creates a feature branch before pushing — but verify the branch is no longer the default before any `git push` actually runs; if it still is, halt.
 - **Never skip hooks.** No `--no-verify`, no `--no-gpg-sign`. If a hook fails, halt with the hook's message verbatim.
 - **Never invent a PR URL.** Only emit the URL `gh pr create` actually returned.
 
