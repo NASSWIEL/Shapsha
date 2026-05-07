@@ -8,10 +8,10 @@ disable-model-invocation: true
 
 ## Context
 
-- Repo state: !`git status --porcelain=v1`
-- Staged stat: !`git diff --cached --stat`
-- Staged diff: !`git diff --cached`
-- Recent subjects: !`git log -5 --pretty=format:"%s"`
+- Repo state: !`git status --porcelain=v1 2>/dev/null || echo "<not-a-repo>"`
+- Staged stat: !`git diff --cached --stat 2>/dev/null || true`
+- Staged diff: !`git diff --cached 2>/dev/null || true`
+- Recent subjects: !`git log -5 --pretty=format:"%s" 2>/dev/null || true`
 
 ## Your task
 
