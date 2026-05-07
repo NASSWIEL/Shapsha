@@ -14,6 +14,8 @@ allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git diff:*), Bas
 - Changed Python files: !`python "${CLAUDE_PLUGIN_ROOT}/tools/list_changed.py" 2>/dev/null`
 - All Python files (only used if $ARGUMENTS == "all"): !`python "${CLAUDE_PLUGIN_ROOT}/tools/list_changed.py" --all 2>/dev/null`
 - Bandit version: !`R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv); $R run bandit --version 2>&1 | head -1 || echo "bandit: NOT INSTALLED"`
+- pip-audit available: !`R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv); $R run pip-audit --version 2>/dev/null | head -1 || echo "pip-audit: NOT INSTALLED"`
+- detect-secrets available: !`R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv); $R run detect-secrets --version 2>/dev/null | head -1 || echo "detect-secrets: NOT INSTALLED"`
 
 ## Your task
 
@@ -53,17 +55,42 @@ To detect HIGH/HIGH, re-pipe bandit with stricter flags:
 R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py"); $R run bandit -f json -lll -iii <files> 2>/dev/null | python -c "import sys,json; raw=sys.stdin.read(); print(len(json.loads(raw or '{}').get('results',[])) if raw.strip() else 0)"
 ```
 
-If the count is `0` → output:
-```
-Security: <total> advisory finding(s). No HIGH/HIGH blocks.
-```
-Stop with success.
-
+If the count is `0` → continue to optional auxiliary scans (below) before emitting the summary.
 If the count is `> 0` → output:
 ```
 Halted: <count> HIGH/HIGH security finding(s) require manual review.
 ```
-Stop with non-zero exit.
+Stop with non-zero exit. (Skip auxiliary scans on halt.)
+
+### Auxiliary scans (opportunistic, advisory only)
+
+Run **only when the corresponding tool is installed** (per Context lines above). Each is advisory: it never halts the suite, only adds counts to the summary.
+
+**pip-audit** — dependency CVEs:
+
+```
+$R run pip-audit --strict --progress-spinner=off 2>/dev/null | tail -20
+```
+
+Count vulnerable packages by counting non-empty result rows (skip the header). Call this `deps_vulns`.
+
+**detect-secrets** — hardcoded credentials in changed files:
+
+```
+$R run detect-secrets scan --baseline /dev/null <files> 2>/dev/null | python -c "import sys,json; d=json.load(sys.stdin) if sys.stdin.isatty() is False else {}; print(sum(len(v) for v in d.get('results',{}).values()))"
+```
+
+Call the count `secrets_found`.
+
+### Final summary
+
+```
+Security: <bandit_total> advisory bandit finding(s), <deps_vulns> dependency vuln(s), <secrets_found> potential secret(s). No HIGH/HIGH blocks.
+```
+
+Omit segments whose tool was not installed. If both auxiliary tools are missing, the line collapses to the original bandit-only form.
+
+Stop with success.
 
 ### Hard rules
 
