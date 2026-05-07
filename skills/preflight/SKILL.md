@@ -9,7 +9,7 @@ allowed-tools: Bash(git status:*), Bash(git rev-parse:*), Bash(git diff:*), Bash
 
 ## Context
 
-- Repo state: !`git status --porcelain=v1`
+- Repo state: !`git status --porcelain=v1 2>/dev/null || echo "<not-a-repo>"`
 - Branch: !`git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "<not-a-repo>"`
 - Default branch: !`gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || echo main`
 - gh present: !`command -v gh >/dev/null 2>&1 && echo yes || echo no`

@@ -2,16 +2,16 @@
 name: doc-sync
 description: Sync French docs in docs/ with code changes from git diff. Auto-applies clean patches; halts only when patches fail to apply.
 disable-model-invocation: true
-allowed-tools: Bash(git diff:*), Bash(git ls-files:*), Bash(git add:*), Bash(git rev-parse:*), Bash(cat:*), Read, Glob, Edit
+allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git add:*), Bash(git rev-parse:*), Bash(cat:*), Read, Glob, Edit
 ---
 
 # /bt-ai:doc-sync
 
 ## Context
 
-- Diff stat (tracked changes): !`{ git diff --stat -- '*.py' 'pyproject.toml' '*.md' 2>/dev/null; git diff --cached --stat -- '*.py' 'pyproject.toml' '*.md' 2>/dev/null; } | head -50`
+- Diff stat (tracked changes): !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --stat --cap 50 '*.py' 'pyproject.toml' '*.md' 2>/dev/null`
 - Untracked files: !`git ls-files --others --exclude-standard -- '*.py' 'pyproject.toml' '*.md' 2>/dev/null | head -20`
-- Diff (capped at 500 lines, includes untracked as new-file hunks): !`{ git diff -- '*.py' 'pyproject.toml' 2>/dev/null; git diff --cached -- '*.py' 'pyproject.toml' 2>/dev/null; for f in $(git ls-files --others --exclude-standard -- '*.py' 'pyproject.toml' 2>/dev/null); do [ -f "$f" ] && { echo "=== NEW FILE: $f ==="; cat "$f"; echo; }; done; } | head -500`
+- Diff (capped at 500 lines, includes untracked as new-file hunks): !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --include-untracked --cap 500 '*.py' 'pyproject.toml' 2>/dev/null`
 
 ## Your task
 

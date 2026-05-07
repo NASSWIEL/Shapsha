@@ -19,8 +19,8 @@ Three modes (decided from `$ARGUMENTS`):
 
 - Argument: $ARGUMENTS
 - Runner: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv`
-- Changed Python files: !`{ git diff --name-only --diff-filter=ACMR -- '*.py' ':!tests/**' 2>/dev/null; git diff --cached --name-only --diff-filter=ACMR -- '*.py' ':!tests/**' 2>/dev/null; git ls-files --others --exclude-standard -- '*.py' ':!tests/**' 2>/dev/null; } | sort -u | tr '\n' ' '`
-- All Python files (only used if $ARGUMENTS == "all"): !`git ls-files -- '*.py' ':!tests/**' 2>/dev/null | tr '\n' ' '`
+- Changed Python files: !`python "${CLAUDE_PLUGIN_ROOT}/tools/list_changed.py" --no-tests 2>/dev/null`
+- All Python files (only used if $ARGUMENTS == "all"): !`python "${CLAUDE_PLUGIN_ROOT}/tools/list_changed.py" --all --no-tests 2>/dev/null`
 - Pytest version: !`R=$(python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" 2>/dev/null || echo uv); $R run pytest --version 2>&1 | head -1 || echo "pytest: NOT INSTALLED"`
 
 ## Your task

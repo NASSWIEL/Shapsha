@@ -9,9 +9,9 @@ allowed-tools: Bash(git diff:*), Bash(git show:*), Bash(git ls-files:*), Bash(gi
 
 ## Context
 
-- Pyproject scripts diff: !`{ git diff -- pyproject.toml 2>/dev/null; git diff --cached -- pyproject.toml 2>/dev/null; } | grep -E '^[+-].*\[project.scripts\]|^[+-].*=.*' | head -30`
-- __all__ changes: !`{ git diff -- '*.py' 2>/dev/null; git diff --cached -- '*.py' 2>/dev/null; for f in $(git ls-files --others --exclude-standard -- '*.py' 2>/dev/null); do [ -f "$f" ] && grep -H '__all__' "$f" 2>/dev/null; done; } | grep -E '^[+-].*__all__|__all__' | head -10`
-- Env var additions: !`{ git diff -- '*.py' 2>/dev/null; git diff --cached -- '*.py' 2>/dev/null; for f in $(git ls-files --others --exclude-standard -- '*.py' 2>/dev/null); do [ -f "$f" ] && grep -H -E 'os\.(environ|getenv)' "$f" 2>/dev/null; done; } | grep -E '^\+.*os\.(environ|getenv)|os\.(environ|getenv)' | head -10`
+- Pyproject scripts diff: !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --grep '^[+-].*(\[project.scripts\]|=)' --cap 30 'pyproject.toml' 2>/dev/null`
+- __all__ changes: !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --include-untracked --grep '__all__' --cap 10 '*.py' 2>/dev/null`
+- Env var additions: !`python "${CLAUDE_PLUGIN_ROOT}/tools/git_diff_combined.py" --include-untracked --grep 'os\.(environ|getenv)' --cap 10 '*.py' 2>/dev/null`
 - Pyproject deps name-set diff: !`python -c "
 import re, subprocess, sys
 try:
@@ -50,7 +50,7 @@ removed = sorted(old - new)
 if added: print('ADDED:', ' '.join(added))
 if removed: print('REMOVED:', ' '.join(removed))
 " 2>/dev/null | head -10`
-- Install files changed: !`{ git diff --name-only 2>/dev/null; git diff --cached --name-only 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } | sort -u | grep -E '^(Dockerfile|Makefile|pyproject\.toml)$' | head -5`
+- Install files changed: !`python "${CLAUDE_PLUGIN_ROOT}/tools/list_changed.py" Dockerfile Makefile pyproject.toml 2>/dev/null`
 
 ## Your task
 

@@ -80,7 +80,12 @@ print(' '.join(already) if already else '<none>')
 
 ## Operating mode
 
-**Silent.** Do not narrate per-step ("Now I will install X..."). Run shell commands via `!` interpolation and emit only the final summary block.
+**Silent.** Emit ONLY the final summary block at the very end. No text before, between, or after tool calls. No "Starting…", no "Now installing…", no "Tools installed.", no "All fragments missing.", no "Now check for…". The user sees:
+
+1. The tool calls (visible to the harness, not narrated by you).
+2. The summary block — your one and only sanctioned text output.
+
+If you find yourself about to write a narrative sentence between tool calls, stop. Either the action is in a tool call (silent) or it is in the final summary (terminal). There is no third channel.
 
 **Hermetic.** All helper logic stays in this SKILL.md (inline Python via `python -c`). Do not write helper scripts (`detect_*.py`, `migrate_*.py`) into the user's repo.
 
