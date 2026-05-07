@@ -73,25 +73,33 @@ If GH auth was `missing` (push-only fallback above), do not run step 4 — emit 
 
 ### Step 4 — open PR
 
-Title = the commit subject. Body in **French**, three sections:
+Title = the commit subject (English Conventional Commit style is fine for the title).
+
+**Body : EN FRANÇAIS — non négociable. EXACTEMENT 1 à 3 bullet points, rien d'autre.**
+
+Règles strictes :
+- Format : **uniquement des bullet points** (`- ...`). 1 minimum, 3 maximum.
+- Pas de prose, pas de paragraphe, pas de phrase isolée hors bullet.
+- Pas de titres `##`, pas de sections, pas de checklist (`- [ ]`).
+- Chaque bullet est en français, factuel, dérivé du diff staged. Jamais inventé.
+- Aucun bullet en anglais — même si le commit message est en anglais, le corps de PR reste en français.
+
+Exemple valide :
 
 ```
-## Contexte
-
-<une à trois phrases : pourquoi ce changement>
-
-## Changements
-
-- <changement 1>
-- <changement 2>
-
-## Plan de test
-
-- [ ] <comment vérifier>
-- [ ] <autre vérification>
+- Ajoute `arithmetic.divide` qui lève `ValueError` sur diviseur zéro.
+- Étend `clamp` aux bornes inversées.
+- Met à jour le README pour la nouvelle commande.
 ```
 
-Run via heredoc:
+Exemples interdits :
+- Plus de 3 bullets.
+- Phrase en prose hors bullet (`Ajoute le helper...` sans `-` devant).
+- Bullet en anglais (`- Adds clamp helper`).
+- Titres de section (`## Contexte`, `## Changements`, `## Plan de test`).
+- Checklist (`- [ ] vérifier que...`).
+
+Run via heredoc :
 
 ```
 gh pr create --title "<title>" --body "$(cat <<'EOF'
@@ -99,6 +107,8 @@ gh pr create --title "<title>" --body "$(cat <<'EOF'
 EOF
 )"
 ```
+
+Avant d'exécuter `gh pr create`, **relis ton body** : si tu vois plus de 3 bullets, de la prose hors bullet, ou de l'anglais, réécris-le avant d'envoyer la commande.
 
 The output of `gh pr create` is the PR URL on the last line — that is the only thing you emit to the user. Print it on its own line, no preamble.
 
@@ -108,4 +118,5 @@ The output of `gh pr create` is the PR URL on the last line — that is the only
 - **Never push to the default branch.** Step 1 prevents this; if you somehow find yourself on the default branch after step 1, stop and surface the failure.
 - **Never skip hooks.** No `--no-verify`, no `--no-gpg-sign`. If a pre-commit/pre-push hook fails, surface its output verbatim and stop.
 - **Do not invent PR URLs.** Only emit the URL `gh pr create` actually returned. If it failed with "a pull request for branch already exists", parse the existing URL out of the error and emit that instead.
+- **PR body en français, 1-3 bullet points uniquement.** Le titre peut être en anglais (Conventional Commit). Le corps NON. Format imposé : `- ...` × 1 à 3, rien d'autre. Pas de prose, pas de sections, pas de checklist. Aucune exception. **La même règle s'applique aux issues GitHub** créées par le plugin (1-3 bullets en français).
 - **Single message.** You have the capability to call multiple tools in a single response. You MUST do steps 1-4 (whichever apply) in a single message. Do not use any other tools or do anything else. Do not send any other text or messages besides these tool calls and the final PR URL (or halt line).

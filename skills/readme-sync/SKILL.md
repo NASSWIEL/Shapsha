@@ -63,14 +63,22 @@ or:
 ### Stage and summarize
 
 - `patched` empty → output `No README change needed.` (append the agent's `reason` if present). Stop with success.
-- `patched` non-empty → run:
+- `patched` non-empty → stage the file:
   ```
   git add -- README.md
   ```
-  Then output:
+  Then capture the staged diff so the user sees what was modified:
+  ```
+  git diff --cached -- README.md 2>/dev/null
+  ```
+  Output exactly this block (the `Modifications:` line is literal; the diff body is the captured output verbatim, no truncation):
   ```
   README patched. Sections: <comma-list of sections_touched>.
+
+  Modifications:
+  <git diff --cached -- README.md output>
   ```
+  Stop with success.
 
 ### Hard rules
 
