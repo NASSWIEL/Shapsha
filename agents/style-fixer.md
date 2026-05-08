@@ -1,6 +1,6 @@
 ---
 name: style-fixer
-description: Apply model-driven style fixes to ONE Python file. Inserts Google-style docstrings for D1xx findings and renames arguments/locals (N803/N806) function-locally. Refuses class/function renames (N801/N802) — those have cross-file effects and the parent skill owns them. One target per invocation. Silent.
+description: Apply model-driven style fixes to ONE Python file. Inserts Google-style docstrings (D1xx), renames arguments/locals (N803/N806), adds missing imports (F821), and fixes syntax errors (E999). Refuses class/function renames (N801/N802) — those have cross-file effects. One target per invocation. Silent.
 model: sonnet
 tools: Read, Edit, MultiEdit
 ---
@@ -132,6 +132,29 @@ The argument lives in a function signature. Its uses are confined to that functi
 
 Same as N803, but the variable is assigned inside the function body (not in the signature).
 
+#### `F821` — undefined name
+
+The ruff message is ``Undefined name `<name>` ``. The model reads the file to understand how `<name>` is used, then adds the correct import.
+
+Procedure:
+
+1. Extract `<name>` from the ruff message.
+2. Search the file for how `<name>` is used (e.g., `os.path.exists(...)` → needs `import os`; `Path(...)` → needs `from pathlib import Path`; `Optional[str]` → needs `from typing import Optional`).
+3. If the usage makes the correct import obvious, add it to the import block at the top of the file. Prefer inserting into the existing import group (stdlib / third-party / local) by scanning what's already there.
+4. If the correct import is ambiguous (e.g., `<name>` could come from multiple packages), refuse with reason `ambiguous-import`.
+
+#### `E999` — syntax error
+
+The ruff message describes the syntax error (e.g., `SyntaxError: Expected ':'`). The model reads the raw file and fixes the syntax.
+
+Common fixes:
+- Missing colon after `def`/`class`/`if`/`for`/`while`/`with`/`try`/`except` → add `:`.
+- Unmatched brackets/parentheses → close them.
+- `print "hello"` (Python 2 syntax) → `print("hello")`.
+- Stray characters or unclosed strings → fix the obvious error.
+
+If the syntax error is unclear or could be fixed multiple ways, refuse with reason `ambiguous-syntax`.
+
 #### `N801` / `N802` — refuse
 
 Push to `refused` with reason `cross-file-rename`. The parent will handle these via `Grep + MultiEdit`.
@@ -147,10 +170,10 @@ If an `Edit`/`MultiEdit` call fails (e.g. `old_string` not unique), retry once w
 ONE line of JSON, no preamble, no markdown:
 
 ```json
-{"file":"<path>","docstrings":<N>,"renames_local":<N>,"refused":[{"code":"N801","row":42,"reason":"cross-file-rename"}],"errors":[]}
+{"file":"<path>","docstrings":<N>,"renames_local":<N>,"code_fixes":<N>,"refused":[{"code":"N801","row":42,"reason":"cross-file-rename"}],"errors":[]}
 ```
 
-`docstrings` counts D1xx fixes applied. `renames_local` counts N803/N806 fixes applied. `refused` lists items the agent intentionally skipped (with reason). `errors` lists items that failed mechanically.
+`docstrings` counts D1xx fixes applied. `renames_local` counts N803/N806 fixes applied. `code_fixes` counts F821 imports added + E999 syntax fixes. `refused` lists items the agent intentionally skipped (with reason). `errors` lists items that failed mechanically.
 
 ## Forbidden
 

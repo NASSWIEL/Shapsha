@@ -36,9 +36,9 @@ Run the full pre-PR validation suite and open a PR. Sub-skills handle their own 
 
 Run each step in order. If a step exits non-zero, surface its message verbatim prefixed with `Halted at step <N>:` and stop. Do not narrate between steps.
 
-**Step 1 — check-style.** Invoke `bt-ai:check-style` via the Skill tool. Asks consent before applying safe ruff fixes; halts on Critical (`F*`/`E9*`) findings with their full list.
+**Step 1 — check-style.** Invoke `bt-ai:check-style` via the Skill tool. Two-pass: ruff fixes everything it can, then model fixes remaining. Never halts.
 
-**Step 2 — security.** Invoke `bt-ai:security`. For HIGH/HIGH bandit findings, proposes concrete fixes and asks consent once for all. Halts on user decline or if HIGH/HIGH remain after fixes.
+**Step 2 — security.** Invoke `bt-ai:security`. Scans all severity levels, proposes fixes for every finding, asks consent once. Halts on user decline or if findings remain after fixes.
 
 **Step 3 — gen-tests.** Invoke `bt-ai:gen-tests` (no arguments → diff mode). Generates tests for changed Python files. Halts on test-collection failure or unresolved semantic failures.
 
