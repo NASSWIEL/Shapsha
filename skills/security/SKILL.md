@@ -25,7 +25,13 @@ Run bandit on the changed (or `all`) Python files **without any severity filter*
 
 1. `$ARGUMENTS` non-empty AND not exactly `all` → output `Unknown argument: <token>. Accepts no argument or 'all'.` Stop.
 2. `bandit: NOT INSTALLED` → output `bandit not installed. Run /bt-ai:proj-init.` Stop.
-3. Target list (resolved per `$ARGUMENTS`) is empty → output `No .py files to scan.` Stop with success.
+
+### Resolve `<files>`
+
+- If `$ARGUMENTS` == `all` → `<files>` = the **All Python files** list from Context (entire codebase).
+- Otherwise (no argument) → `<files>` = the **Changed Python files** list from Context (diff only).
+
+If `<files>` is empty → output `No .py files to scan.` Stop with success.
 
 ### Scan — all levels
 

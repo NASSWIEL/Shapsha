@@ -28,7 +28,13 @@ Two-pass architecture: **ruff fixes everything it can** (cheap, fast, no LLM tok
 
 1. `$ARGUMENTS` is non-empty AND not exactly `all` → output `Unknown argument: <token>. Accepts no argument or 'all'.` Stop.
 2. `ruff: NOT INSTALLED` → output `ruff not installed. Run /bt-ai:proj-init.` Stop.
-3. Target list (resolved per `$ARGUMENTS`) is empty → output `No .py files to lint.` Stop with success.
+
+### Resolve `<files>`
+
+- If `$ARGUMENTS` == `all` → `<files>` = the **All Python files** list from Context (entire codebase).
+- Otherwise (no argument) → `<files>` = the **Changed Python files** list from Context (diff only).
+
+If `<files>` is empty → output `No .py files to lint.` Stop with success.
 
 ### Pass 1 — ruff fixes everything it can
 
