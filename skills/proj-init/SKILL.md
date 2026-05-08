@@ -101,24 +101,28 @@ If you find yourself about to write a narrative sentence between tool calls, sto
 
    stop with non-zero status.
 
-### A.0 Choose runner — always explicit when ambiguous
+### A.0 Choose runner — always ask when both are installed
 
 Determine the runner using this priority:
 
-1. `Existing runner setting` is `uv` or `poetry` → reuse silently. Skip to step A.
-2. **Both runners installed AND project shape is `bare`** → use `AskUserQuestion` (one prompt, two options):
-   - `uv` — fast, lockfile `uv.lock`, dev deps under `[dependency-groups]`
-   - `poetry` — `poetry.lock`, dev deps under `[tool.poetry.group.dev.dependencies]`
+1. `Existing runner setting` is `uv` or `poetry` → reuse silently (the user already chose on a previous run; respect that). Skip to step A.
 
-   Default suggestion: `uv` (faster, becoming the default in modern Python tooling). The skill MUST surface this question; do not guess silently.
+2. **Both runners installed** (regardless of project shape) → use `AskUserQuestion` (one prompt, two options). The user MUST be the one to choose — never decide silently when both are available:
 
-3. **Both runners installed AND project shape is `uv` or `poetry`** → silently reuse the matching runner (the project's existing convention wins).
+   - **header**: `Runner choice`
+   - **question**: `uv ou poetry pour ce projet ?` followed by a one-line context hint based on `Project shape`:
+     - `bare` → `Aucune préférence détectée dans pyproject.toml.`
+     - `uv` → `Le projet utilise déjà uv (uv.lock ou [dependency-groups] détecté).`
+     - `poetry` → `Le projet utilise déjà poetry ([tool.poetry] ou poetry.lock détecté).`
+     - `mixed` → `Note : le projet contient à la fois des métadonnées poetry et uv ; choisis celui que tu veux utiliser désormais.`
+   - **multiSelect**: `false`
+   - **options**:
+     - label `uv` — description `fast, lockfile uv.lock, dev deps under [dependency-groups]`
+     - label `poetry` — description `lockfile poetry.lock, dev deps under [tool.poetry.group.dev.dependencies]`
 
-4. **Both runners installed AND project shape is `mixed`** → use `AskUserQuestion` (same prompt as step 2). Add a one-line note: `Note: project has both Poetry and uv metadata; choose carefully.` Default to whichever lockfile was modified more recently; if tied, default `uv`.
+3. **Only one runner installed AND project shape matches OR is `bare` OR is `mixed`** → use it silently (no choice to offer).
 
-5. **Only one runner installed AND project shape matches OR is `bare` OR is `mixed`** → use it silently.
-
-6. **Only one runner installed AND project shape mismatches** (e.g., shape `poetry` but only `uv` installed) → `AskUserQuestion` with two options:
+4. **Only one runner installed AND project shape mismatches** (e.g., shape `poetry` but only `uv` installed) → `AskUserQuestion` with two options:
    - `proceed` — Continue with the installed runner. Dev deps will be added in **its native section**, which differs from the project's existing convention. Existing deps under the other runner's section remain untouched but will not be reachable via `<runner> run` until migrated.
    - `abort` — Stop. The user must install the matching runner first.
 

@@ -1,8 +1,8 @@
 ---
 name: security
-description: "Analyse de sécurité bandit sur les fichiers Python modifiés. Liste tous les findings HIGH/HIGH avec une proposition de correction. Demande consentement une fois pour tout corriger. MEDIUM reste consultatif."
+description: "Analyse de sécurité bandit sur les fichiers Python modifiés. Liste tous les findings HIGH/HIGH avec une proposition de correction. Demande consentement une fois pour tout corriger via fan-out parallèle (un sous-agent security-fixer par fichier, en simultané). MEDIUM reste consultatif."
 disable-model-invocation: true
-allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git rev-parse:*), Bash(git add:*), Read, Edit, MultiEdit
+allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git rev-parse:*), Bash(git add:*), Read
 ---
 
 # /bt-ai:security
@@ -20,6 +20,8 @@ allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git diff:*), Bas
 ## Your task
 
 Run bandit on the changed (or `all`) Python files, classify findings, **list every HIGH/HIGH finding with a concrete proposed fix**, ask the user once whether to apply all fixes, and emit a single summary line. MEDIUM is advisory — no question, no fix.
+
+On `Yes`, the parent does **not** edit files itself: it groups blocked findings by `filename` and **fans out one `security-fixer` subagent per file in parallel** (single message, up to 10 `Task` calls per batch). Each subagent reads its own file, applies the proposed fixes, and returns one line of JSON. The parent aggregates the results and re-runs bandit to verify.
 
 ### Guards
 
@@ -99,23 +101,56 @@ Halted: <N> HIGH/HIGH security finding(s) require manual review.
 
 Stop with non-zero exit. Skip auxiliary scans.
 
-#### On `Yes`
+#### On `Yes` — fan-out to `security-fixer` (parallel, per file)
 
-1. Apply each proposal via `Edit` (or `MultiEdit` when several findings target the same file — atomic, reviewer-friendly). The `old_string` MUST come from the line you read; do not paraphrase.
-2. Stage modified files:
+Group `blocked[]` by `filename`. Each group becomes one subagent invocation.
+
+**Issue ALL `Task` calls in a single message.** For G groups ≤ 10, that's G `Task` tool calls in the same response. For G > 10, split into batches of 10 across consecutive messages (Claude Code's parallel limit is 10 per message).
+
+Each `Task` call invokes subagent `security-fixer` with this JSON payload:
+
+```json
+{
+  "file": "<source path>",
+  "findings": [
+    {"test_id": "<B-code>", "line": <int>, "issue": "<bandit issue_text>", "proposed": "<the proposed fix you composed for this finding>"},
+    ...
+  ]
+}
+```
+
+`proposed` is the same fix text already shown to the user above — pass it verbatim so the subagent applies what was approved.
+
+Each subagent returns ONE line of JSON:
+
+```json
+{"file":"<path>","applied":<N>,"refused":[{"test_id":"B102","line":17,"reason":"manual-review-required"}],"errors":[]}
+```
+
+Aggregate across all subagents:
+
+- `applied_total` = sum of `applied`
+- `agent_refused[]` = flat union of every `refused` list (these stay as advisory)
+- `agent_errors[]` = flat union of every `errors` list
+
+If `agent_errors[]` is non-empty, surface them in the final summary but do not halt — the user can re-run.
+
+#### After fan-out
+
+1. Stage modified files. The set of touched files = the keys of the groups above:
    ```
-   for f in <modified files>; do git add -- "$f"; done
+   for f in <modified files>; do git diff --quiet -- "$f" 2>/dev/null || git add -- "$f"; done
    ```
-3. Re-run bandit on the same files to verify:
+2. Re-run bandit on the same files to verify:
    ```
    <runner> run bandit -f json -ll -ii <files> 2>/dev/null || true
    ```
-4. Re-classify. If `len(blocked) > 0` after re-run, output:
+3. Re-classify. If `len(blocked) > 0` after re-run, output:
    ```
    Halted: <N> HIGH/HIGH security finding(s) remain after fix attempts. Manual review required.
    ```
-   List the remaining `blocked[]` items the same way as above. Stop with non-zero exit.
-5. Else continue to auxiliary scans.
+   List the remaining `blocked[]` items the same way as above (include any `agent_refused[]` entries — they explain why some items were not fixed). Stop with non-zero exit.
+4. Else continue to auxiliary scans.
 
 ### Auxiliary scans (opportunistic, advisory only)
 
@@ -153,8 +188,10 @@ Stop with success.
 
 ### Hard rules
 
-- **Propose, list, ask once, then fix.** Never edit a file before the user says `Yes` to `AskUserQuestion`. Never split the consent question per finding — one question for the whole batch.
-- **Fix proposal must be concrete.** Read the actual line; tailor the proposal to the real symbol names. Generic "review this" is only acceptable for `Other / unknown` cases.
+- **Propose, list, ask once, then fan out.** Never invoke a subagent before the user says `Yes` to `AskUserQuestion`. Never split the consent question per finding — one question for the whole batch.
+- **Fix proposal must be concrete.** Read the actual line; tailor the proposal to the real symbol names. Generic "review this" is only acceptable for `Other / unknown` cases. The proposal text gets passed verbatim to the subagent.
+- **Parent does not edit.** Edits happen inside `security-fixer` subagents only. The parent reads files (to compose proposals) and invokes `Task` — that is all.
+- **All `Task` calls in one message for parallelism.** ≤ 10 per batch. The parallel limit is enforced by Claude Code; sequential issuance defeats the speedup.
 - **`|| true` on every scanner.** Bandit/pip-audit/detect-secrets exit 1 when findings exist; the user must not see "Exit code 1" framed as an error.
 - **Stage only what you modified.** Never `git add -A`.
 - **Hermetic.** Never write classifier scripts, scratch JSON, or log files into the user's repo. The model classifies bandit's JSON output directly.

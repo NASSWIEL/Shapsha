@@ -24,8 +24,8 @@ ruff, bandit, pyright, pytest, gitlint-core sont installés par `proj-init` dans
 | Commande | Quand | Ce qu'elle fait |
 |---|---|---|
 | `/bt-ai:proj-init` | Une fois, à la création du projet | Détecte la forme du projet, choisit le runner, installe les outils, dépose les configs et templates de docs |
-| `/bt-ai:check-style` | Après modification de fichiers `.py` | Lance ruff, applique automatiquement les corrections sûres, n'interrompt que sur les erreurs Critiques (`F*`, `E9*`) |
-| `/bt-ai:security` | Après modification de fichiers `.py` | Lance bandit, affiche les findings ≥ MEDIUM/MEDIUM en advisory, n'interrompt que sur HIGH/HIGH (exec, eval, pickle, clés codées en dur, injection shell) |
+| `/bt-ai:check-style` | Après modification de fichiers `.py` | Lance ruff. Affiche chaque finding avec un extrait de code (3 lignes). Halt sur Critical (`F*`, `E9*`). Pour le reste, demande consentement avant de fixer : ruff fait les corrections mécaniques, le modèle complète les docstrings (`D1xx`) et applique les renommages (`N801`/`N802`/`N803`/`N806`) |
+| `/bt-ai:security` | Après modification de fichiers `.py` | Lance bandit. Pour chaque HIGH/HIGH, propose un fix concret et demande consentement une fois pour tout corriger. MEDIUM reste advisory |
 | `/bt-ai:gen-tests` | Après ajout/modification de code applicatif | Génère des tests pytest, lance les tests, répare les échecs mécaniques (cap 3), interrompt sur échec sémantique |
 | `/bt-ai:doc-sync` | Après changement d'API publique | Patch minimal pour `docs/` et docstrings ; appliqué automatiquement |
 | `/bt-ai:readme-sync` | Après changement de surface utilisateur (CLI, env vars, deps) | Patch minimal pour `README.md` (français) ; appliqué automatiquement |
@@ -56,16 +56,16 @@ ruff, bandit, pyright, pytest, gitlint-core sont installés par `proj-init` dans
 
 ## Sous-agents
 
-Contexte isolé, périmètre minimal, mode silent.
+Contexte isolé, périmètre minimal, mode silent. Invoqués en parallèle par les skills parents (un agent par fichier, tous les `Task` dans le même message — fan-out).
 
-| Agent | Modèle | Rôle |
-|---|---|---|
-| `test-writer` | Sonnet | Génère les tests pytest manquants (golden + erreur + boundary) |
-| `test-fixer` | Haiku | Répare les échecs mécaniques après pytest (one-shot, parent rappelle si nécessaire) |
-| `doc-patcher` | Sonnet | Patches unified-diff minimaux pour `docs/*.md` |
-| `readme-patcher` | Sonnet | Patch `README.md` (surface utilisateur uniquement, ton français préservé) |
-| `style-fixer` | Sonnet | *(manuel)* fix ruff ciblés via Task |
-| `security-fixer` | Sonnet | *(manuel)* fix bandit narrow (`B113` timeout, etc.) |
+| Agent | Modèle | Invoqué par | Rôle |
+|---|---|---|---|
+| `style-fixer` | Sonnet | `check-style` | Insère docstrings Google-style (`D1xx`) et renomme arguments/variables locales (`N803`/`N806`) dans UN fichier. Refuse les renommages de classes/fonctions (`N801`/`N802`) — le parent les gère via Grep + MultiEdit |
+| `security-fixer` | Sonnet | `security` | Applique les fix bandit HIGH/HIGH proposés par le parent dans UN fichier (B101, B105/106/107, B201, B311, B324, B501–503, B602/605/607). Refuse les findings d'intention (B102, B301/302/306, B608) avec raison structurée |
+| `test-writer` | Sonnet | `gen-tests` | Génère les tests pytest manquants pour UN fichier source (golden + erreur + boundary). Ne réécrit jamais les tests existants. Pas de `pytest.skip` |
+| `test-fixer` | Haiku | `gen-tests` | Répare les échecs mécaniques pytest (imports, fixtures, args) sur UN fichier de test. One-shot, parent rappelle si nécessaire (cap 3). Lecture seule sur le code source |
+| `doc-patcher` | Sonnet | `doc-sync` | Patche UN `docs/*.md` à partir des faits du code et d'un diff optionnel. Lit `index.md` + le doc cible uniquement, jamais les 6 |
+| `readme-patcher` | Sonnet | `readme-sync` | Patche `README.md` quand une surface utilisateur change (CLI, env vars, deps). Ton français préservé |
 
 ## Philosophie de design
 
