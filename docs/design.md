@@ -18,7 +18,7 @@ This document records what is implemented, the workflow it produces, the methodo
 The plugin's design intent is threefold:
 
 1. **Lower the cost of doing the right thing**: linting, security scanning, test generation, doc sync, README sync, commit hygiene, and PR creation are all behind one-line slash commands.
-2. **Keep the cost of getting it wrong**: the plugin halts loudly on critical findings rather than silently masking them; auto-fix is scoped to changes that cannot alter program behaviour; consent is required before any non-mechanical edit.
+2. **Keep the cost of getting it wrong**: auto-fix is scoped to changes that cannot alter program behaviour; consent is required before security fixes (which can change runtime behaviour); everything else is either auto-fixed or reported as advisory.
 3. **Stay fast on multi-file work**: when several files need the same kind of mutation (per-file style fixes, per-file security fixes, per-file test generation, per-doc patching), the parent skill fans out one subagent per file in a single message. Subagents run in parallel; aggregate results come back as JSON.
 
 ---
@@ -89,7 +89,7 @@ Two manifests describe the marketplace and the plugin separately. `marketplace.j
 | Commit messages | English | Conventional Commits 1.0 |
 | PR body | English subject, French body, 1–3 short bullets | one bullet per substantive change |
 | Branch naming | `<type>/<slug>` | enforced at step 1 of `commit-push-pr` |
-| Severity buckets (ruff) | 4 buckets: `critical`, `safe_fixable`, `model_fixable`, `advisory` (see §4.5) |
+| Severity buckets (ruff) | 2 buckets: `model_fixable`, `advisory` (see §4.5). Ruff fixes everything it can in Pass 1; remaining findings are classified in Pass 2 |
 | Bandit threshold | severity ≥ MEDIUM AND confidence ≥ MEDIUM (`-ll -ii`) |
 | Bandit blocking criterion | severity == HIGH AND confidence == HIGH (the `blocked[]` bucket) |
 | Test location | `tests/foo/test_bar.py` mirroring `src/foo/bar.py` |
@@ -140,18 +140,20 @@ This pattern is necessary because:
 
 The pattern is verified across all five skills.
 
-### 4.5 Four-bucket severity scheme for ruff
+### 4.5 Two-pass architecture: ruff first, model second
 
-Ruff produces hundreds of distinct rule codes. `check-style` maps them into one of four buckets and uses bucket policy, not per-code policy:
+`check-style` never halts — everything is either fixed or reported as advisory. The architecture uses ruff for cheap mechanical fixes, then the LLM for intelligent fixes ruff can't handle.
+
+**Pass 1 — ruff fixes everything it can:** `ruff check --fix --unsafe-fixes` with all enabled codes, then `ruff format`. This handles F401 (unused import), F541 (f-string without placeholders), F841 (unused variable), E/W/I/UP, D-fixable, B007/B009/B010/B011, and every other code ruff knows how to fix. One shell call, zero LLM tokens.
+
+**Pass 2 — re-scan, classify remaining into two buckets:**
 
 | Bucket | Codes | Routing |
 |---|---|---|
-| **`critical`** | `F*`, `E9*` | Halt with the full listing — never auto-fixed (real bugs need human review). |
-| **`safe_fixable`** | `E` (not `E9`), `W`, `I`, `UP`, **plus** any `D*` whose ruff `fix` field is non-null, **plus** `B007`/`B009`/`B010`/`B011`, **plus** `S101` only on `tests/` files | Ruff `--fix` handles them mechanically (single shell call, ruff parallelises internally). |
-| **`model_fixable`** | `D100`–`D107` whose ruff `fix` field is null (missing docstring — ruff can't generate text), **plus** `N801`/`N802`/`N803`/`N806` (renames) | Model edits: per-file work fans out to `style-fixer` subagents (D1xx + N803/N806); cross-file class/function renames (N801/N802) are handled by the parent via Grep + MultiEdit. |
-| **`advisory`** | All other `B*`, `S*`, `C90*`, `PL*`, and any `N*` outside the rename whitelist | Reported only — no automatic fix path. |
+| **`model_fixable`** | `D100`–`D107` with null `fix` (missing docstring — ruff can't generate text), **plus** `N801`/`N802`/`N803`/`N806` (renames), **plus** `F821` (undefined name — model adds the missing import), **plus** `E999` (syntax error — model reads the raw file and repairs) | Model edits: per-file work fans out to `style-fixer` subagents; cross-file class/function renames (N801/N802) are handled by the parent via Grep + MultiEdit. |
+| **`advisory`** | Everything else: `B*`, `S*`, `C90*`, `PL*`, other `F*`/`E*` with null `fix` not listed above, and any `N*` outside the rename whitelist | Reported only — no automatic fix path. |
 
-Display rule: every finding (any bucket) renders as a 3-line code snippet so the user sees what is about to change. Critical halts immediately; everything else either auto-runs (advisory) or is gated by a single `AskUserQuestion`. The team negotiated which prefixes go where once; afterwards every project gets the same treatment.
+Display rule: every remaining finding renders as a 3-line code snippet so the user sees what the model is about to change. No `AskUserQuestion` — fixes are applied automatically after display.
 
 ### 4.6 HIGH/HIGH-only blocking, with refuse-on-intent inside the agent
 
@@ -237,23 +239,22 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 #### `/bt-ai:check-style`
 
-**Use case**: lint changed Python files; auto-fix the safe stuff, prompt the user once on everything else, halt on the critical stuff.
+**Use case**: lint changed Python files; auto-fix everything possible, never halt, never prompt.
 
-**Engine**: `<runner> run ruff check ... --output-format=json --no-fix` for findings (where `<runner>` is `uv` or `poetry`, resolved via `tools/resolve_runner.py`); `<runner> run ruff check ... --fix --select=E,W,D,I,UP --silent` followed by `<runner> run ruff format` for the safe-fix tier; `--force-exclude` is always passed so `[tool.ruff].extend-exclude` applies to explicit file lists.
+**Two-pass architecture** (see §4.5): Pass 1 runs `<runner> run ruff check --fix --unsafe-fixes` followed by `<runner> run ruff format` — ruff fixes everything it can (cheap, no LLM tokens). Pass 2 re-scans with `--output-format=json --no-fix` and classifies remaining findings into `model_fixable[]` (LLM can fix) or `advisory[]` (report only). `--force-exclude` is always passed so `[tool.ruff].extend-exclude` applies to explicit file lists.
 
-**Severity buckets**: see §4.5. Every finding (in any bucket) is printed with a 3-line code snippet so the user sees what is about to change. Each `model_fixable` block also previews the action it will take (`→ Insert a Google-style function docstring under def <name>(...):` or `→ Rename argument <old> → <new>`).
+**Display**: every remaining finding (in any bucket) is printed with a 3-line code snippet. Each `model_fixable` block also previews the action (`→ Insert a Google-style function docstring under def <name>(...):`, `→ Add missing import for <name>`, etc.).
 
-**Decision point**: 
-- If `len(critical) > 0` → halt with the full critical listing and snippets. No question.
-- If only `advisory` findings exist → print them and exit 0. No question.
-- Otherwise → display all findings with snippets, then **immediately run the fix sequence** (no consent prompt — non-critical style fixes are always applied automatically).
+**Decision point** (never halts):
+- No remaining findings → `Style: no findings (ruff fixed everything).` exit 0.
+- Only `advisory` → print them and exit 0.
+- `model_fixable` present → display all findings with snippets, then **immediately run the fix sequence** (no consent prompt).
 
-**Fix sequence (after `Yes`)**:
-1. `safe_fixable` → ruff `--fix` (mechanical: imports, whitespace, formatting, docstring stubs ruff can write itself, plus `B007`/`B009`/`B010`/`B011`, plus `S101` only on `tests/`). Ruff parallelises internally.
-2. `model_fixable` per-file → fan-out: one `style-fixer` subagent per impacted file, **all `Task` calls in a single message** (≤10 per batch). Each agent inserts D1xx docstrings and renames N803/N806 arguments/locals inside its own file. Aggregates `docstrings_total`, `renames_local_total`, `agent_refused[]`, `agent_errors[]`.
-3. `model_fixable` cross-file (N801 class / N802 function renames) → handled by the **parent** via `Grep` (find every reference) + per-file `MultiEdit`. Subagents refuse these by design.
-4. Re-run ruff to verify; halt if `critical` reappeared.
-5. Stage only the files that were actually modified.
+**Fix sequence**:
+1. `model_fixable` per-file → fan-out: one `style-fixer` subagent per impacted file, **all `Task` calls in a single message** (≤10 per batch). Each agent inserts D1xx docstrings, renames N803/N806 arguments/locals, adds missing imports (F821), and fixes syntax errors (E999) inside its own file. Aggregates `docstrings_total`, `renames_local_total`, `code_fixes_total`, `agent_refused[]`, `agent_errors[]`.
+2. `model_fixable` cross-file (N801 class / N802 function renames) → handled by the **parent** via `Grep` (find every reference) + per-file `MultiEdit`. Subagents refuse these by design.
+3. Re-run ruff to verify.
+4. Stage only the files that were actually modified.
 
 **Output**: `Style: <fixed_count> auto-fixed, <remaining_advisory> advisory finding(s) remain.`
 
@@ -336,7 +337,7 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 **Use case**: pre-PR validation suite. Sequential, halt on first failure.
 
 **Eight steps**:
-1. `check-style` — halt if `critical` findings exist; otherwise auto-fixes everything non-critical (no prompt).
+1. `check-style` — two-pass: ruff auto-fixes, then model fixes remaining. Never halts (no prompt).
 2. `security` — halt if `blocked[]` HIGH/HIGH remain or user declined the fix prompt.
 3. `gen-tests` (diff mode) — halt on subagent failure or pytest collection failure that survives 3 `test-fixer` iterations.
 4. `pytest -q` — halt on test failure; emits the captured tail.
@@ -380,7 +381,7 @@ Six subagents live under `agents/`. Each runs in an isolated context, in silent 
 
 | Agent | Model | Used by | Tools | Output | Role |
 |-------|-------|---------|-------|--------|------|
-| `style-fixer` | sonnet | check-style | `Read, Edit, MultiEdit` | `{"file":"...","docstrings":N,"renames_local":N,"refused":[...],"errors":[]}` | Per-file: insert Google-style docstrings for `D100`–`D107` findings ruff cannot fix itself; rename arguments/locals (`N803`/`N806`) within the enclosing function only. Refuses cross-file class/function renames (`N801`/`N802`) — those belong to the parent. |
+| `style-fixer` | sonnet | check-style | `Read, Edit, MultiEdit` | `{"file":"...","docstrings":N,"renames_local":N,"code_fixes":N,"refused":[...],"errors":[]}` | Per-file: insert Google-style docstrings for `D100`–`D107` findings ruff cannot fix itself; rename arguments/locals (`N803`/`N806`) within the enclosing function only; add missing imports (`F821`); fix syntax errors (`E999`). Refuses cross-file class/function renames (`N801`/`N802`) — those belong to the parent. |
 | `security-fixer` | sonnet | security | `Read, Edit, MultiEdit` | `{"file":"...","applied":N,"refused":[{"test_id":"...","line":N,"reason":"..."}],"errors":[]}` | Per-file: apply concrete bandit HIGH/HIGH fixes the parent already proposed (B101→raise, B105/106/107→env var, B201→`debug=False`, B311→`secrets`, B324→sha256 / `usedforsecurity=False`, B501–503→`verify=True`, B602/605/607→arg list). Refuses intent-bearing findings (B102, B301/302/306, B608) with a structured reason. |
 | `test-writer` | sonnet | gen-tests | `Read, Write, Edit, MultiEdit, Glob, Bash` | `{"file":"...","tests_added":N,"collection_ok":bool,"errors":[]}` | Per-source-file: write golden + error + boundary tests for missing public symbols (functions, methods, async functions). Never overwrites an existing test. Never emits `pytest.skip` stubs. Single `Write` or single `MultiEdit` per file. |
 | `test-fixer` | haiku | gen-tests | `Read, Edit, Glob, Bash` | `{"file":"...","fixed":N,"unfixable":N}` | Repair mechanical pytest failures (missing imports, wrong fixture names, bad arg counts) on test files only. Read-only on source. One-shot — the parent re-invokes if more iterations are needed (cap 3). |
@@ -451,7 +452,7 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 | Use case | Skill / command | How it is handled |
 |---|---|---|
 | New repo bootstrap | `proj-init` | Step A asks for runner (uv/poetry) and installs tools; B drops configs; C drops docs; D verifies |
-| Fix lint on what I just changed | `check-style` | Diff-driven scope; halt on `critical`; ruff auto-fixes `safe_fixable`; fan-out `style-fixer` for D1xx + N803/N806; parent handles N801/N802 cross-file |
+| Fix lint on what I just changed | `check-style` | Diff-driven scope; two-pass (ruff first, model second); fan-out `style-fixer` for D1xx + N803/N806 + F821 + E999; parent handles N801/N802 cross-file; never halts |
 | Security audit on what I just changed | `security` | Bandit MEDIUM/MEDIUM threshold, HIGH/HIGH blocking; concrete fix proposal per `blocked[]` finding; consent prompt; fan-out `security-fixer` per file |
 | Tests for a new function | `gen-tests` (targeted) | Symbol extraction (incl. async def) → missing-only → fan-out `test-writer`; pytest collect → fan-out `test-fixer` if mechanical errors |
 | Tests for whole feature branch | `gen-tests` (diff mode) | Same as above but scope = all changed `.py` |
@@ -557,7 +558,7 @@ These exclusions are by design. Each one was a separate decision; the user opted
 - **One file per subagent.** Each fan-out agent edits exactly the file in its input — never another. Forbidden by the agent's hard rules; would cause write conflicts when the parent issues N parallel `Task` calls.
 - **Subagents do not run `git`/`gh`.** Staging, re-verification, and PR creation are the parent's job. Only `test-writer`/`test-fixer` use `Bash` (for `pytest --collect-only`).
 - **Refuse-on-intent for security.** `security-fixer` refuses `B102`/`B301`/`B302`/`B306`/`B608` and any line it cannot match to the proposal — they show up in `refused[]` with a structured reason and never become silent rewrites.
-- **Consent gate on security only.** `security` asks `Yes`/`No` once before fan-out (security fixes can alter program behavior). `check-style` auto-applies non-critical fixes without prompting (docstrings and renames are safe, mechanical changes).
+- **Consent gate on security only.** `security` asks `Yes`/`No` once before fan-out (security fixes can alter program behavior). `check-style` auto-applies all fixes without prompting — two-pass architecture (ruff first, model second) ensures everything is either auto-fixed or reported as advisory.
 
 ### 10.2 Edge cases handled
 
@@ -571,9 +572,9 @@ These exclusions are by design. Each one was a separate decision; the user opted
 | Network failure on `uv add` / `poetry add` | `proj-init` | Exit non-zero with stderr |
 | Re-run on already-initialised project | `proj-init` | All targets identical → `proj-init complete. (no changes)` |
 | Empty changed-files list | check-style, security | `No .py files to lint.` / `No .py files to scan.` exit 0 |
-| Only `advisory` findings, no `critical`/`safe_fixable`/`model_fixable` | check-style | Print advisory blocks with snippets; exit 0; no question |
+| Only `advisory` findings after ruff Pass 1 | check-style | Print advisory blocks with snippets; exit 0; no question |
 | `len(blocked) == 0` AND only advisory bandit findings | security | No prompt; auxiliary scans run; final summary line |
-| User declines consent prompt | security | Halt with non-zero (`Halted: <N> HIGH/HIGH security finding(s) require manual review.`). `check-style` has no consent prompt — fixes are automatic. |
+| User declines consent prompt | security | Halt with non-zero (`Halted: <N> HIGH/HIGH security finding(s) require manual review.`). |
 | All findings already covered by tests | gen-tests | `All changed files already have tests.` exit 0 |
 | Pytest collection fails on generated tests (mechanical) | gen-tests | Fan-out `test-fixer`; up to 3 iterations; halt verbatim if still failing |
 | Pytest collection fails on generated tests (semantic) | gen-tests | Halt verbatim, no auto-rewrite |
@@ -593,7 +594,7 @@ These exclusions are by design. Each one was a separate decision; the user opted
 Observed during empirical testing on real third-party projects:
 
 - **Both runners supported, but mixing is not.** `proj-init` asks the user to choose `uv` or `poetry` and persists the choice in `[tool.bt-ai].runner`. If the user later switches managers manually without re-running `proj-init`, the runner key may diverge from the actual lockfile state.
-- **No default `extend-exclude` for generated code.** ANTLR parsers, protobuf stubs, etc. will produce `F405`-style critical errors; projects with generated files need per-file ignores added manually.
+- **No default `extend-exclude` for generated code.** ANTLR parsers, protobuf stubs, etc. will produce noisy findings; projects with generated files need per-file ignores added manually.
 - **`gen-tests` package-name resolution** reads `[project] name` from `pyproject.toml`. Multi-namespace projects (where `from src.X` and `from <pkg>.Y` coexist) may receive imports tied to the wrong root.
 - **`doc-sync` is hardcoded to `docs/`.** Projects with root-level docs or a different docs root are not covered.
 - **`readme-sync`'s `deps_added` regex** (`^[+-]\s*"[a-zA-Z]`) can false-fire on `authors`, `classifiers`, or `keywords` array changes; the agent typically returns `patched:false` in those cases, but the signal flagging is conservative.
@@ -644,6 +645,6 @@ Current: `0.1.10`. Bump policy:
 
 Version history (highlights):
 
-- **0.1.10** — both `uv` and `poetry` runners supported, chosen at `proj-init`; runner persisted in `[tool.bt-ai].runner`. `gen-tests` covers `async def`. Per-file fan-out architecture for `check-style` (style-fixer), `security` (security-fixer), `gen-tests` (test-writer + test-fixer), and `doc-sync` (doc-patcher) — all `Task` calls in a single message, ≤10 per batch. Four-bucket ruff severity. HIGH/HIGH-only bandit blocking. Single `AskUserQuestion` (`Yes`/`No`) consent gate. `style-fixer` and `security-fixer` agents now exist as standalone files.
+- **0.1.10** — both `uv` and `poetry` runners supported, chosen at `proj-init`; runner persisted in `[tool.bt-ai].runner`. `gen-tests` covers `async def`. Per-file fan-out architecture for `check-style` (style-fixer), `security` (security-fixer), `gen-tests` (test-writer + test-fixer), and `doc-sync` (doc-patcher) — all `Task` calls in a single message, ≤10 per batch. Two-pass lint architecture: ruff fixes everything it can first, model fixes remaining (D1xx, N8xx, F821, E999). Two-bucket classification (model_fixable + advisory, no critical halt). HIGH/HIGH-only bandit blocking. Consent gate on security only. `style-fixer` and `security-fixer` agents now exist as standalone files.
 
 The version is declared once in `.claude-plugin/plugin.json`. Skills do not embed it.

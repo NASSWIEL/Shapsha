@@ -24,7 +24,7 @@ ruff, bandit, pyright, pytest, gitlint-core sont installés par `proj-init` dans
 | Commande | Quand | Ce qu'elle fait |
 |---|---|---|
 | `/bt-ai:proj-init` | Une fois, à la création du projet | Détecte la forme du projet, choisit le runner, installe les outils, dépose les configs et templates de docs |
-| `/bt-ai:check-style` | Après modification de fichiers `.py` | Lance ruff. Affiche chaque finding avec un extrait de code (3 lignes). Halt sur Critical (`F*`, `E9*`). Pour le reste, corrige automatiquement : ruff fait les corrections mécaniques, le modèle insère les docstrings (`D1xx`) et applique les renommages (`N801`/`N802`/`N803`/`N806`) en parallèle |
+| `/bt-ai:check-style` | Après modification de fichiers `.py` | Deux passes : ruff corrige tout ce qu'il peut (`--fix --unsafe-fixes`), puis le modèle corrige le reste (docstrings `D1xx`, renommages `N8xx`, imports manquants `F821`, erreurs de syntaxe `E999`) en fan-out parallèle. Ne s'arrête jamais — tout est corrigé ou signalé |
 | `/bt-ai:security` | Après modification de fichiers `.py` | Lance bandit. Pour chaque HIGH/HIGH, propose un fix concret et demande consentement une fois pour tout corriger. MEDIUM reste advisory |
 | `/bt-ai:gen-tests` | Après ajout/modification de code applicatif | Génère des tests pytest, lance les tests, répare les échecs mécaniques (cap 3), interrompt sur échec sémantique |
 | `/bt-ai:doc-sync` | Après changement d'API publique | Patch minimal pour `docs/` et docstrings ; appliqué automatiquement |
@@ -41,7 +41,7 @@ ruff, bandit, pyright, pytest, gitlint-core sont installés par `proj-init` dans
 
 | # | Étape | Halt si |
 |---|---|---|
-| 1 | `check-style` | Findings Critical (`F*`, `E9*`) |
+| 1 | `check-style` | Jamais (tout est corrigé ou advisory) |
 | 2 | `security` | Findings HIGH/HIGH |
 | 3 | `gen-tests` (diff) | Échec sémantique persistant après 3 réparations mécaniques |
 | 4 | `pytest -q` (full suite) | Exit non-zero |
@@ -60,7 +60,7 @@ Contexte isolé, périmètre minimal, mode silent. Invoqués en parallèle par l
 
 | Agent | Modèle | Invoqué par | Rôle |
 |---|---|---|---|
-| `style-fixer` | Sonnet | `check-style` | Insère docstrings Google-style (`D1xx`) et renomme arguments/variables locales (`N803`/`N806`) dans UN fichier. Refuse les renommages de classes/fonctions (`N801`/`N802`) — le parent les gère via Grep + MultiEdit |
+| `style-fixer` | Sonnet | `check-style` | Insère docstrings Google-style (`D1xx`), renomme arguments/variables locales (`N803`/`N806`), ajoute les imports manquants (`F821`), corrige les erreurs de syntaxe (`E999`) dans UN fichier. Refuse les renommages de classes/fonctions (`N801`/`N802`) — le parent les gère via Grep + MultiEdit |
 | `security-fixer` | Sonnet | `security` | Applique les fix bandit HIGH/HIGH proposés par le parent dans UN fichier (B101, B105/106/107, B201, B311, B324, B501–503, B602/605/607). Refuse les findings d'intention (B102, B301/302/306, B608) avec raison structurée |
 | `test-writer` | Sonnet | `gen-tests` | Génère les tests pytest manquants pour UN fichier source (golden + erreur + boundary). Ne réécrit jamais les tests existants. Pas de `pytest.skip` |
 | `test-fixer` | Haiku | `gen-tests` | Répare les échecs mécaniques pytest (imports, fixtures, args) sur UN fichier de test. One-shot, parent rappelle si nécessaire (cap 3). Lecture seule sur le code source |
@@ -74,7 +74,7 @@ Inspirée du plugin [`commit-commands`](https://github.com/anthropics/claude-cod
 - **Silence par défaut.** L'utilisateur voit le diff, le résultat final, ou la halt-line. Pas de narration intermédiaire.
 - **Skills en tant que prompts**, pas state machines : prompts courts (≤ 100 lignes), contexte injecté via `!command` pré-exécuté, single-message incantation pour forcer les appels d'outils en parallèle.
 - **`allowed-tools` étroits** (`Bash(git status:*)` plutôt que `Bash`) pour éviter les confirmations sur le chemin heureux.
-- **`AskUserQuestion` uniquement pour l'ambiguïté réelle.** Seul `proj-init` en utilise (choix `uv`/`poetry`).
+- **`AskUserQuestion` uniquement pour l'ambiguïté réelle.** Seul `proj-init` (choix `uv`/`poetry`) et `security` (consentement avant fix HIGH/HIGH) en utilisent.
 - **Refus systématiques** : pas de `--no-verify`, pas de `--force` push, pas de push sur la branche par défaut.
 - **Hermétique.** Tous les helpers Python du plugin vivent sous `${CLAUDE_PLUGIN_ROOT}/tools/`. Aucun script auxiliaire n'est jamais écrit dans le repo de l'utilisateur.
 
