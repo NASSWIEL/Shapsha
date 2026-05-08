@@ -64,11 +64,6 @@ skills-BT-AI/                                 ← marketplace = plugin
 │   │   ├── contracts.md
 │   │   ├── glossaire.md
 │   │   └── fonctionnel.md
-│   └── github/
-│       ├── PULL_REQUEST_TEMPLATE.md
-│       └── ISSUE_TEMPLATE/
-│           ├── bug_report.md
-│           └── feature_request.md
 ├── README.md                                 ← French, plugin-installer-facing
 ├── LICENSE
 └── DESIGN.md                                 ← original contract document
@@ -373,7 +368,7 @@ poetry add --group dev ruff bandit pyright pytest pytest-cov gitlint-core   # if
 - `.gitignore` — copy if absent; append the python set if `__pycache__/` token missing.
 - `pyproject.toml` — create minimal if absent; for each section (`[tool.ruff]`, `[tool.pyright]`, `[tool.bandit]`, `[tool.pytest.ini_options]`), append-if-absent / skip-if-identical / prompt-if-different.
 
-**Step C — documentation templates**: `cp -n` (no-clobber) for `README.md`, six files under `docs/`, GitHub PR template, GitHub issue templates. Never overwrites.
+**Step C — documentation templates**: `cp -n` (no-clobber) for `README.md` and six files under `docs/`. Never overwrites.
 
 **Step D — verification**: runs each tool's `--version`. Failure aborts with which tool failed.
 
@@ -406,8 +401,6 @@ All subagents are **silent**, return a single-line JSON result, and never run `g
 | `templates/gitignore.python` | Standard Python ignores. |
 | `templates/README.md` | French, user-project README skeleton. |
 | `templates/docs/{index,architecture,data-model,contracts,glossaire,fonctionnel}.md` | French doc skeletons with `MODE D'EMPLOI` blocks at end (used by `doc-patcher` for routing). |
-| `templates/github/PULL_REQUEST_TEMPLATE.md` | French PR body template (Contexte / Changements / Plan de test) — used when a contributor opens a PR via the GitHub UI. The auto-composed PR body produced by `commit-push-pr` is a different format (1–3 short bullets) and does not use this template. |
-| `templates/github/ISSUE_TEMPLATE/{bug_report,feature_request}.md` | French issue templates. |
 
 ---
 
@@ -424,7 +417,7 @@ All subagents are **silent**, return a single-line JSON result, and never run `g
    ├─ asks for runner if both uv and poetry present
    ├─ persists [tool.bt-ai].runner in pyproject.toml
    ├─ <runner> add (--dev | --group dev) ruff bandit pyright pytest pytest-cov gitlint-core
-   ├─ creates .gitlint, .gitignore, docs/, .github/, README.md
+   ├─ creates .gitlint, .gitignore, docs/, README.md
    └─ patches pyproject.toml with [tool.ruff], [tool.pyright], [tool.bandit], [tool.pytest.ini_options]
 4. write some code
 5. /bt-ai:preflight

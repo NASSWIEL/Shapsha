@@ -331,7 +331,7 @@ If empty: skip silently; `Migrations` list is `none`.
 `cp -n` (no-clobber). Never read+write — keeps context clean.
 
 ```
-!mkdir -p docs .github/ISSUE_TEMPLATE
+!mkdir -p docs
 !cp -n "${CLAUDE_PLUGIN_ROOT}/templates/docs/index.md" docs/index.md 2>/dev/null || true
 !cp -n "${CLAUDE_PLUGIN_ROOT}/templates/docs/architecture.md" docs/architecture.md 2>/dev/null || true
 !cp -n "${CLAUDE_PLUGIN_ROOT}/templates/docs/data-model.md" docs/data-model.md 2>/dev/null || true
@@ -339,9 +339,6 @@ If empty: skip silently; `Migrations` list is `none`.
 !cp -n "${CLAUDE_PLUGIN_ROOT}/templates/docs/glossaire.md" docs/glossaire.md 2>/dev/null || true
 !cp -n "${CLAUDE_PLUGIN_ROOT}/templates/docs/fonctionnel.md" docs/fonctionnel.md 2>/dev/null || true
 !cp -n "${CLAUDE_PLUGIN_ROOT}/templates/README.md" README.md 2>/dev/null || true
-!cp -n "${CLAUDE_PLUGIN_ROOT}/templates/github/PULL_REQUEST_TEMPLATE.md" .github/PULL_REQUEST_TEMPLATE.md 2>/dev/null || true
-!cp -n "${CLAUDE_PLUGIN_ROOT}/templates/github/ISSUE_TEMPLATE/bug_report.md" .github/ISSUE_TEMPLATE/bug_report.md 2>/dev/null || true
-!cp -n "${CLAUDE_PLUGIN_ROOT}/templates/github/ISSUE_TEMPLATE/feature_request.md" .github/ISSUE_TEMPLATE/feature_request.md 2>/dev/null || true
 ```
 
 ### D. Verify installations
