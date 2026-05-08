@@ -96,43 +96,39 @@ If you find yourself about to write a narrative sentence between tool calls, sto
 1. If neither `uv` nor `poetry` is installed → output:
 
    ```
-   proj-init aborted: need uv or poetry. Install uv: https://docs.astral.sh/uv/getting-started/installation/  Install poetry: https://python-poetry.org/docs/#installation
+   proj-init aborted: besoin de uv (pour venv) ou poetry. Install uv: https://docs.astral.sh/uv/getting-started/installation/  Install poetry: https://python-poetry.org/docs/#installation
    ```
 
    stop with non-zero status.
 
-### A.0 Choose runner — always ask when both are installed
+### A.0 Choose runner — always ask
 
-Determine the runner using this priority:
+Determine the runner:
 
-1. `Existing runner setting` is `uv` or `poetry` → reuse silently (the user already chose on a previous run; respect that). Skip to step A.
+1. `Existing runner setting` is `uv`, `venv`, or `poetry` → reuse silently (the user already chose on a previous run; respect that). Skip to step A.
 
-2. **Both runners installed** (regardless of project shape) → use `AskUserQuestion` (one prompt, two options). The user MUST be the one to choose — never decide silently when both are available:
+2. **Otherwise — always ask.** Use `AskUserQuestion` (one prompt, two options). The user MUST choose — never decide silently, even if only one tool is installed:
 
-   - **header**: `Runner choice`
-   - **question**: `uv ou poetry pour ce projet ?` followed by a one-line context hint based on `Project shape`:
+   - **header**: `Environnement`
+   - **question**: `venv ou poetry pour ce projet ?` followed by a one-line context hint based on `Project shape`:
      - `bare` → `Aucune préférence détectée dans pyproject.toml.`
-     - `uv` → `Le projet utilise déjà uv (uv.lock ou [dependency-groups] détecté).`
+     - `uv` → `Le projet utilise déjà un venv (uv.lock ou [dependency-groups] détecté).`
      - `poetry` → `Le projet utilise déjà poetry ([tool.poetry] ou poetry.lock détecté).`
      - `mixed` → `Note : le projet contient à la fois des métadonnées poetry et uv ; choisis celui que tu veux utiliser désormais.`
    - **multiSelect**: `false`
    - **options**:
-     - label `uv` — description `fast, lockfile uv.lock, dev deps under [dependency-groups]`
-     - label `poetry` — description `lockfile poetry.lock, dev deps under [tool.poetry.group.dev.dependencies]`
+     - label `venv` — description `Environnement virtuel standard (via uv). Lockfile uv.lock, dev deps sous [dependency-groups]`
+     - label `poetry` — description `Lockfile poetry.lock, dev deps sous [tool.poetry.group.dev.dependencies]`
 
-3. **Only one runner installed AND project shape matches OR is `bare` OR is `mixed`** → use it silently (no choice to offer).
-
-4. **Only one runner installed AND project shape mismatches** (e.g., shape `poetry` but only `uv` installed) → `AskUserQuestion` with two options:
-   - `proceed` — Continue with the installed runner. Dev deps will be added in **its native section**, which differs from the project's existing convention. Existing deps under the other runner's section remain untouched but will not be reachable via `<runner> run` until migrated.
-   - `abort` — Stop. The user must install the matching runner first.
-
-   On `abort` → output `proj-init aborted: project shape (<shape>) mismatches the only installed runner (<runner>). Install the matching runner or re-run with both available.` exit non-zero.
+3. **After the choice — verify the tool is installed.**
+   - `venv` requires `uv` on PATH. If not installed → output `proj-init aborted: uv requis pour le mode venv. Install: https://docs.astral.sh/uv/getting-started/installation/` stop.
+   - `poetry` requires `poetry` on PATH. If not installed → output `proj-init aborted: poetry requis. Install: https://python-poetry.org/docs/#installation` stop.
 
 After the choice is known, persist it to `pyproject.toml` so all other skills (`check-style`, `security`, etc.) dispatch consistently. If `pyproject.toml` does not yet exist, create the minimal version described in step B.1 first, then add:
 
 ```toml
 [tool.bt-ai]
-runner = "<uv|poetry>"
+runner = "<venv|poetry>"
 ```
 
 Persistence script (the skill substitutes `<RUNNER>` before running):
@@ -208,7 +204,7 @@ Capture stdout into `TOOLS_TO_INSTALL`. If empty (all tools already declared som
 
 If non-empty, branch on chosen runner:
 
-- `uv`:
+- `venv` (uses `uv` under the hood):
   ```
   !uv add --dev $TOOLS_TO_INSTALL 2>&1 | tail -5
   ```
@@ -219,7 +215,7 @@ If non-empty, branch on chosen runner:
 
 Note: `gitlint-core` is the dependency-light variant of gitlint (without the `sh` package which fails to build on Windows because of `fcntl`). Same `gitlint` CLI; clean install on both runners.
 
-If the install command exits non-zero → output `proj-init aborted: <runner> add failed.` followed by the captured stderr verbatim. Stop with non-zero status.
+If the install command exits non-zero → output `proj-init aborted: install failed.` followed by the captured stderr verbatim. Stop with non-zero status.
 
 ### B. Drop config files (hybrid: skip-if-identical, ask-if-conflict, create-if-missing)
 
@@ -345,7 +341,7 @@ If empty: skip silently; `Migrations` list is `none`.
 
 Use the chosen runner.
 
-`uv`:
+`venv` (uses `uv run` under the hood):
 ```
 !uv run ruff --version && uv run bandit --version && uv run pyright --version && uv run pytest --version && uv run gitlint --version 2>&1 | head -10
 ```
@@ -365,7 +361,7 @@ No `.pre-commit-config.yaml`, no CI workflows under `.github/workflows/`, no `Do
 
 ```
 proj-init complete.
-  Runner: <uv|poetry>
+  Runner: <venv|poetry>
   Tools: ruff, bandit, pyright, pytest, pytest-cov, gitlint-core
   Configs: <list per file: created/patched/kept>
   Migrations: <list of root docs moved to docs/, or "none">

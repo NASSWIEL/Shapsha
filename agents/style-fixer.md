@@ -1,6 +1,6 @@
 ---
 name: style-fixer
-description: Apply model-driven style fixes to ONE Python file. Inserts Google-style docstrings (D1xx), renames arguments/locals (N803/N806), adds missing imports (F821), and fixes syntax errors (E999). Refuses class/function renames (N801/N802) — those have cross-file effects. One target per invocation. Silent.
+description: Apply model-driven style fixes to ONE Python file. Inserts Google-style docstrings (D1xx), renames arguments/locals (N803/N806), adds missing imports (F821), fixes syntax errors (E999), and fixes security codes (S113, S301, S311, S324, S501-S503, S506, S602/S605/S607, S608). Refuses class/function renames (N801/N802). One target per invocation. Silent.
 model: sonnet
 tools: Read, Edit, MultiEdit
 ---
@@ -155,6 +155,56 @@ Common fixes:
 
 If the syntax error is unclear or could be fixed multiple ways, refuse with reason `ambiguous-syntax`.
 
+#### `S113` — requests without timeout
+
+Add `timeout=30` to the call. If the call already has keyword arguments, append `timeout=30` to them.
+
+```python
+# Before
+response = requests.get(url)
+# After
+response = requests.get(url, timeout=30)
+```
+
+#### `S301` / `S302` — pickle usage
+
+Replace `pickle.load(f)` → `json.load(f)`, `pickle.dump(obj, f)` → `json.dump(obj, f)`. Add `import json` if absent. If the data involves custom Python objects that JSON cannot serialize, refuse with reason `pickle-for-complex-objects`.
+
+#### `S311` — random for crypto
+
+Replace `random.randint(a, b)` → `secrets.randbelow(b - a + 1) + a`. Replace `random.choice(seq)` → `secrets.choice(seq)`. Add `import secrets` if absent.
+
+#### `S324` — weak hash (md5/sha1)
+
+If the hash is used for non-security purposes (cache keys, checksums): add `usedforsecurity=False`. If used for security: replace with `hashlib.sha256()`.
+
+```python
+# Before (non-security use)
+hashlib.md5(data.encode()).hexdigest()
+# After
+hashlib.md5(data.encode(), usedforsecurity=False).hexdigest()
+```
+
+#### `S501` / `S502` / `S503` — TLS/cert verification
+
+Replace `verify=False` → `verify=True` (or remove the kwarg).
+
+#### `S506` — unsafe YAML load
+
+Replace `yaml.load(data)` or `yaml.load(data, Loader=yaml.FullLoader)` with `yaml.safe_load(data)`.
+
+#### `S602` / `S605` / `S607` — shell=True
+
+Convert `subprocess.run("cmd arg", shell=True)` → `subprocess.run(["cmd", "arg"])`. If the command string contains interpolation, refuse with reason `complex-shell-syntax`.
+
+#### `S608` — SQL injection
+
+If the DB driver is identifiable from imports (`sqlite3` → `?`, `psycopg2` → `%s`), convert f-string SQL to parameterized query. If the driver cannot be determined, refuse with reason `unknown-db-driver`.
+
+#### Other `S*` codes
+
+Read the ruff message and the surrounding code. Apply the fix that matches the ruff recommendation. If ambiguous, refuse with reason `ambiguous-security-fix`.
+
 #### `N801` / `N802` — refuse
 
 Push to `refused` with reason `cross-file-rename`. The parent will handle these via `Grep + MultiEdit`.
@@ -170,10 +220,10 @@ If an `Edit`/`MultiEdit` call fails (e.g. `old_string` not unique), retry once w
 ONE line of JSON, no preamble, no markdown:
 
 ```json
-{"file":"<path>","docstrings":<N>,"renames_local":<N>,"code_fixes":<N>,"refused":[{"code":"N801","row":42,"reason":"cross-file-rename"}],"errors":[]}
+{"file":"<path>","docstrings":<N>,"renames_local":<N>,"code_fixes":<N>,"security_fixes":<N>,"refused":[{"code":"N801","row":42,"reason":"cross-file-rename"}],"errors":[]}
 ```
 
-`docstrings` counts D1xx fixes applied. `renames_local` counts N803/N806 fixes applied. `code_fixes` counts F821 imports added + E999 syntax fixes. `refused` lists items the agent intentionally skipped (with reason). `errors` lists items that failed mechanically.
+`docstrings` counts D1xx fixes applied. `renames_local` counts N803/N806 fixes applied. `code_fixes` counts F821 imports added + E999 syntax fixes. `security_fixes` counts S* fixes applied. `refused` lists items the agent intentionally skipped (with reason). `errors` lists items that failed mechanically.
 
 ## Forbidden
 

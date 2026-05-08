@@ -2,7 +2,7 @@
 name: gen-tests
 description: "Génère des tests pytest pour les fichiers Python modifiés (ou une cible explicite). Reflète l'arborescence sous tests/. Fan-out parallèle (un sous-agent par fichier source, en simultané). Vérifie et auto-répare les échecs mécaniques. S'arrête sur les échecs sémantiques."
 disable-model-invocation: true
-allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash(git diff:*), Bash(git ls-files:*), Bash(printf:*), Read, Glob
+allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash(git diff:*), Bash(git ls-files:*), Bash(printf:*), Read, Glob, Edit, MultiEdit
 ---
 
 # /bt-ai:gen-tests
@@ -117,58 +117,73 @@ Run pytest on all the freshly written test paths in one batch. Replace `<runner>
 <runner> run pytest -q --no-header --tb=short <space-separated test paths from files> 2>&1
 ```
 
-Read pytest's output. The "short test summary info" block at the end lists each failure (one line per `FAILED` or `ERROR`). Above it, each traceback ends with the actual error type. Build counters `passed`, `failed`, `errors` from the final pytest summary line, then for each failure produce a `{test_id, kind, detail}` entry routed to `mechanical[]` or `semantic[]`:
-
-**MECHANICAL** (auto-fixable, route to `test-fixer`):
-
-| `kind` | Detection |
-|---|---|
-| `ModuleNotFoundError` | Traceback ends with `ModuleNotFoundError: No module named '...'` |
-| `ImportError` | Traceback ends with `ImportError: cannot import name '...' from '...'` |
-| `NameError` | Traceback ends with `NameError: name '...' is not defined` |
-| `fixture-not-found` | ERROR section contains `fixture '...' not found` |
-| `missing-argument` | `TypeError: <fn>() missing N required positional argument` |
-| `SyntaxError` | Traceback ends with `SyntaxError: ...` |
-| `AttributeError-import` | `AttributeError: module '...' has no attribute '...'` from a stale `from X import Y` |
-
-**SEMANTIC** (judgment-required, halt):
-
-| `kind` | Detection |
-|---|---|
-| `AssertionError` | `assert <left> == <right>` (or other comparison) failure with concrete values |
-| `DID-NOT-RAISE` | `Failed: DID NOT RAISE <ExceptionType>` |
-| `WrongExceptionType` | `pytest.raises(...)` caught a different exception type than expected |
-| `Other` | Anything not matched above |
+Read pytest's output. Build counters `passed`, `failed`, `errors` from the final pytest summary line.
 
 #### If `failed == 0 && errors == 0`
 
 Output `Generated tests for N files in parallel: <comma-list>. All tests pass.` Stop with success.
 
-#### If only mechanical failures remain
+#### If tests fail — improve source code
 
-Auto-delegate to subagent `test-fixer` with the mechanical list. Cap retries at 3. Each iteration must reduce `failed + errors`; if not, break and treat the rest as semantic.
+Tests are the truth. If a test fails, the **original source code** has a deficiency — the test is correct. Do NOT modify test code.
 
-```json
-{
-  "failures": [{"test_id": "...", "kind": "ImportError", "detail": "..."}],
-  "test_files": ["..."],
-  "package_name": "...",
-  "import_root": "...",
-  "runner": "<literal Runner from Context, uv or poetry>"
-}
+**Step 1 — analyze each failure.** For each failing test:
+
+1. `Read` the test file to understand what the test expects (the assertion, the expected return value, the expected exception).
+2. `Read` the source file being tested to understand what the code actually does.
+3. Determine what change to the source code would make the test pass.
+
+**Step 2 — propose source code improvements.** Display all proposed improvements:
+
+```
+<N> test(s) failed — proposing improvements to source code:
+
+  1. <test_file>::<test_name> — <failure description>
+     Source: <source_file>:<line>
+     → Proposed improvement: <concrete description of the code change>
+
+  2. ...
 ```
 
-Wait for the agent's line: `repaired=<n> still_failing=<n> files=<list>`. After each iteration, re-stage modified files and re-run pytest, re-classifying failures the same way.
+**Step 3 — ask consent once.** Call `AskUserQuestion` with:
 
-#### If semantic failures remain
+- **header**: `Source code improvements`
+- **question**: `Do you want me to improve the source code so all tests pass?`
+- **multiSelect**: `false`
+- **options**:
+  - label `Yes`, description `Apply all proposed improvements above`
+  - label `No`, description `Skip — tests remain failing`
 
-Output `Halted: <n> generated test(s) need manual review.` followed by one line per semantic failure (`<test_id>: <kind> — <detail>`). Stop with non-zero exit.
+**Step 4 — on `Yes`, apply improvements.**
 
-The user inspects the failures, fixes them by hand, and re-runs preflight or commits manually. **Do not** ask the user keep/regen/discard.
+Apply the proposed changes to the **source files** (not the test files) via `Edit`/`MultiEdit`. Then re-run pytest:
+
+```
+<runner> run pytest -q --no-header --tb=short <test paths> 2>&1
+```
+
+If all tests pass → stage both test files and modified source files → output summary → stop with success.
+
+If tests still fail → repeat Steps 1-4 (cap at 2 iterations total). If still failing after 2 iterations:
+
+```
+Halted: <n> test(s) still failing after source code improvements. Review the failures above.
+```
+
+Stop with non-zero exit.
+
+**Step 4 — on `No`.**
+
+```
+Tests generated but <N> failing. Source code improvements declined.
+```
+
+Stop with success (the tests are written and staged, even if some fail).
 
 ### Hard rules
 
 - **Fan-out parallèle**: les N appels `Task` partent dans **un seul message** du parent. Sériels = pénalité de 5-10× sur le wall-clock.
-- **No AskUserQuestion.** This skill auto-fixes what is mechanically fixable, and halts cleanly on the rest.
-- **Hermetic.** Never write `gen_tests_*.py`, `targets.json`, parser scripts, or any scratch helper into the user's tree. The user's `git status` shows only the new `tests/**.py` files (plus any test-fixer edits).
-- **Single message per phase.** Discover (1 message of Reads/Globs), fan-out (1 message of N Tasks), stage (1 message of git adds), verify (1 message), then retry loop (1 message per iteration).
+- **Tests are the truth.** Never modify test code after generation. If a test fails, the source code is improved — not the test.
+- **Consent before modifying source.** Always `AskUserQuestion` before changing the user's original code. The user must see what will change and approve.
+- **Hermetic.** Never write `gen_tests_*.py`, `targets.json`, parser scripts, or any scratch helper into the user's tree.
+- **Single message per phase.** Discover (1 message of Reads/Globs), fan-out (1 message of N Tasks), stage (1 message of git adds), verify (1 message), then improvement loop (1 message per iteration).

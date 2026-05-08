@@ -13,12 +13,12 @@ This document records what is implemented, the workflow it produces, the methodo
 
 ## 1. Purpose
 
-`bt-ai` standardises Python engineering practice for the BT-AI team at CGI. It bundles seven model-invokable skills, two deterministic slash commands, six focused subagents, and a set of project templates so that new repositories start on the same footing and changes are validated with the same gates before reaching `main`.
+`bt-ai` standardises Python engineering practice for the BT-AI team at CGI. It bundles seven model-invokable skills, two deterministic slash commands, six focused subagents (five active, one retained but unused), and a set of project templates so that new repositories start on the same footing and changes are validated with the same gates before reaching `main`.
 
 The plugin's design intent is threefold:
 
 1. **Lower the cost of doing the right thing**: linting, security scanning, test generation, doc sync, README sync, commit hygiene, and PR creation are all behind one-line slash commands.
-2. **Keep the cost of getting it wrong**: auto-fix is scoped to changes that cannot alter program behaviour; consent is required before security fixes (which can change runtime behaviour); everything else is either auto-fixed or reported as advisory.
+2. **Keep the cost of getting it wrong**: auto-fix is scoped to changes that cannot alter program behaviour; consent is required before security fixes and before modifying source code to satisfy generated tests; everything else is either auto-fixed or reported as advisory.
 3. **Stay fast on multi-file work**: when several files need the same kind of mutation (per-file style fixes, per-file security fixes, per-file test generation, per-doc patching), the parent skill fans out one subagent per file in a single message. Subagents run in parallel; aggregate results come back as JSON.
 
 ---
@@ -81,8 +81,8 @@ Two manifests describe the marketplace and the plugin separately. `marketplace.j
 | Marketplace name | `CGI-BT-AI` | repo + folder |
 | Layout | plugin at repo root | single-plugin marketplace |
 | Distribution | git clone + `/plugin install` | personal GitHub |
-| Python toolchain | `uv` **or** `poetry`, chosen at `proj-init` time | `ruff`, `bandit`, `pyright`, `pytest`, `pytest-cov`, `gitlint-core` |
-| Runner persistence | `[tool.bt-ai].runner = "uv"|"poetry"` in `pyproject.toml` | resolved by `tools/resolve_runner.py` |
+| Python toolchain | `venv` (via `uv`) **or** `poetry`, chosen at `proj-init` time | `ruff`, `bandit`, `pyright`, `pytest`, `pytest-cov`, `gitlint-core` |
+| Runner persistence | `[tool.bt-ai].runner = "venv"|"poetry"` in `pyproject.toml` | resolved by `tools/resolve_runner.py` (`venv` maps to `uv` internally) |
 | Plugin repo README | French (dev-facing) | |
 | Template README (proj-init drops) | French (user project) | |
 | Doc templates | French | |
@@ -95,7 +95,7 @@ Two manifests describe the marketplace and the plugin separately. `marketplace.j
 | Test location | `tests/foo/test_bar.py` mirroring `src/foo/bar.py` |
 | Silent execution | mandatory — no narration |
 | Skill auto-invocation | disabled — `disable-model-invocation: true` everywhere |
-| Consent before edits | mandatory for `security` only (`AskUserQuestion`); `check-style`/`doc-sync`/`readme-sync` auto-apply |
+| Consent before edits | mandatory for `security` (before fixing findings) and `gen-tests` (before modifying source code) via `AskUserQuestion`; `check-style`/`doc-sync`/`readme-sync` auto-apply |
 | Per-file fan-out | `check-style`, `security`, `gen-tests`, `doc-sync` each issue all `Task` calls in a single message (≤10 per batch) |
 
 ---
@@ -110,7 +110,7 @@ The plugin separates **deterministic shell** (slash commands), **rule-driven bra
 |------|-----------|---------|-------------|-------------------|
 | 1 | Slash commands | Bash only, allowlisted | Fully deterministic | None — pure text composition from diffs |
 | 2 | Skills | Allowlisted Bash (`git`, runner, plugin tools) + Read + Edit/MultiEdit/Grep where needed + `Task` for fan-out | Branches on shell output | Pre-flight, classification, fix proposals, consent prompts, fan-out orchestration |
-| 3 | Subagents | Read + Edit/MultiEdit (and Glob/Grep/Bash where the task needs it, e.g. `test-writer`/`test-fixer` need `pytest --collect-only`) | Free within tool allowlist | Per-file edits: docstrings, renames, security fixes, tests, doc patches, README patches |
+| 3 | Subagents | Read + Edit/MultiEdit (and Glob/Grep/Bash where the task needs it, e.g. `test-writer` needs pytest collection) | Free within tool allowlist | Per-file edits: docstrings, renames, security fixes, tests, doc patches, README patches |
 
 This layering is what makes `Silent execution` achievable: the user-visible turn is dominated by the parent skill's single-line summary, while the reasoning happens inside isolated subagents whose intermediate context never reaches the parent. Subagents return one line of structured JSON; the parent aggregates and emits the final summary.
 
@@ -150,8 +150,8 @@ The pattern is verified across all five skills.
 
 | Bucket | Codes | Routing |
 |---|---|---|
-| **`model_fixable`** | `D100`–`D107` with null `fix` (missing docstring — ruff can't generate text), **plus** `N801`/`N802`/`N803`/`N806` (renames), **plus** `F821` (undefined name — model adds the missing import), **plus** `E999` (syntax error — model reads the raw file and repairs) | Model edits: per-file work fans out to `style-fixer` subagents; cross-file class/function renames (N801/N802) are handled by the parent via Grep + MultiEdit. |
-| **`advisory`** | Everything else: `B*`, `S*`, `C90*`, `PL*`, other `F*`/`E*` with null `fix` not listed above, and any `N*` outside the rename whitelist | Reported only — no automatic fix path. |
+| **`model_fixable`** | `D100`–`D107` (missing docstring), `N801`/`N802`/`N803`/`N806` (renames), `F821` (undefined name), `E999` (syntax error), **plus** `S*` security codes the LLM can fix (S113 timeout, S301 pickle, S311 random, S324 weak hash, S501-S503 TLS, S506 yaml, S602/S605/S607 shell, S608 SQL, and others) | Model edits: per-file work fans out to `style-fixer` subagents; cross-file renames (N801/N802) handled by parent via Grep + MultiEdit. |
+| **`advisory`** | `C90*` (complexity — requires refactoring), `PL*` (pylint — architectural), and any code where the LLM genuinely cannot determine a safe fix | Reported only — no automatic fix path. |
 
 Display rule: every remaining finding renders as a 3-line code snippet so the user sees what the model is about to change. No `AskUserQuestion` — fixes are applied automatically after display.
 
@@ -175,7 +175,7 @@ Six subagents are invoked via `Task`. Each runs in a separate context window. Th
 
 1. **Targeted reads.** The subagent reads only the files it needs (e.g., `doc-patcher` reads `index.md` always, then only the impacted docs from a 6-doc set). Reading 4 unrelated docs would otherwise pollute the parent context.
 2. **Structured input/output.** The subagent receives a typed JSON payload, not the full diff text history. The parent's earlier turns stay clean. The subagent returns a single line of JSON the parent aggregates.
-3. **Narrow tool allowlist.** Each agent's `tools` line lists only what it needs. None can call `Bash` for git/network operations except `test-writer`/`test-fixer`, which need pytest collection. Subagents never run `git`, `gh`, or any side-effecting shell command — staging and re-verification belong to the parent.
+3. **Narrow tool allowlist.** Each agent's `tools` line lists only what it needs. None can call `Bash` for git/network operations except `test-writer`, which needs pytest collection. Subagents never run `git`, `gh`, or any side-effecting shell command — staging and re-verification belong to the parent.
 4. **Parallelism.** When several files need the same kind of mutation, the parent issues one `Task` call per file **in a single message**. Claude Code runs them in parallel up to a cap of 10 per message; for G > 10 groups, the parent splits across consecutive messages of 10. This keeps multi-file work latency proportional to the slowest single-file call, not to the sum.
 
 ### 4.7.1 Why per-file fan-out and not per-finding
@@ -282,8 +282,9 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 **Use case**: ensure every public function in a changed file has a corresponding pytest test.
 
-**Two modes**:
+**Three modes**:
 - **Diff mode** (no args): scans changed `*.py` excluding `tests/**`.
+- **Full sweep** (`all`): every tracked `*.py` excluding `tests/**`.
 - **Targeted mode** (`/bt-ai:gen-tests path1 path2 ...`): scans those files/dirs explicitly.
 
 **Path mapping**: `src/foo/bar.py` → `tests/foo/test_bar.py`; `foo/bar.py` (no `src/` prefix) → `tests/foo/test_bar.py`; `pkg.py` at root → `tests/test_pkg.py`.
@@ -292,7 +293,7 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 **Fan-out**: per-source-file work — one `test-writer` subagent per source file with missing tests, **all `Task` calls in a single message** (≤10 per batch). Each agent writes its own test file with golden + error + boundary cases.
 
-**Verification and repair**: after the agents write tests, the parent runs `<runner> run pytest --collect-only <files>`. On collection failure, the parent fans out `test-fixer` agents (per file with mechanical errors) to repair imports/fixture names/missing args. The repair loop has a cap of 3 iterations; semantic failures (real assertion errors) halt with the output surfaced verbatim.
+**Verification and source code improvement**: after the agents write tests, the parent runs pytest. Tests are the truth — if a test fails, the source code is improved (not the test). The parent reads the failing test and source, proposes concrete improvements, asks consent once (`AskUserQuestion`), applies the changes, and re-runs (cap 2 iterations). Halt only if failures persist after improvements.
 
 #### `/bt-ai:doc-sync`
 
@@ -341,7 +342,7 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 **Eight steps**:
 1. `check-style` — two-pass: ruff auto-fixes, then model fixes remaining. Never halts (no prompt).
 2. `security` — scans all levels, proposes fixes, asks consent once. Halt if user declines or findings remain after fix.
-3. `gen-tests` (diff mode) — halt on subagent failure or pytest collection failure that survives 3 `test-fixer` iterations.
+3. `gen-tests` (diff mode) — halt on collection failure or if tests still fail after 2 iterations of source code improvements.
 4. `pytest -q` — halt on test failure; emits the captured tail.
 5. `doc-sync` — auto-applies; halt only if a patch fails to apply.
 6. `readme-sync` — auto-applies; halt only if the agent reports an error.
@@ -359,7 +360,7 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 **Use case**: bootstrap a new (or partly initialised) project with the team's standards.
 
-**Step A — choose runner and install dev tools**: if both `uv` and `poetry` are installed, `AskUserQuestion` for the user's preferred runner; otherwise infer from the lockfile present (`uv.lock` → `uv`, `poetry.lock` → `poetry`); fall back to `uv` if neither is present. The choice is persisted in `[tool.bt-ai].runner` in `pyproject.toml`. Then:
+**Step A — choose runner and install dev tools**: always `AskUserQuestion` for `venv` or `poetry` (even if only one tool is installed). `venv` is backed by `uv` internally. The choice is persisted as `[tool.bt-ai].runner = "venv"|"poetry"` in `pyproject.toml`. Then:
 
 ```
 uv add --dev   ruff bandit pyright pytest pytest-cov gitlint-core   # if runner == uv
@@ -383,10 +384,10 @@ Six subagents live under `agents/`. Each runs in an isolated context, in silent 
 
 | Agent | Model | Used by | Tools | Output | Role |
 |-------|-------|---------|-------|--------|------|
-| `style-fixer` | sonnet | check-style | `Read, Edit, MultiEdit` | `{"file":"...","docstrings":N,"renames_local":N,"code_fixes":N,"refused":[...],"errors":[]}` | Per-file: insert Google-style docstrings for `D100`–`D107` findings ruff cannot fix itself; rename arguments/locals (`N803`/`N806`) within the enclosing function only; add missing imports (`F821`); fix syntax errors (`E999`). Refuses cross-file class/function renames (`N801`/`N802`) — those belong to the parent. |
+| `style-fixer` | sonnet | check-style | `Read, Edit, MultiEdit` | `{"file":"...","docstrings":N,"renames_local":N,"code_fixes":N,"security_fixes":N,"refused":[...],"errors":[]}` | Per-file: insert Google-style docstrings for `D100`–`D107` findings ruff cannot fix itself; rename arguments/locals (`N803`/`N806`) within the enclosing function only; add missing imports (`F821`); fix syntax errors (`E999`); fix security codes (`S113`, `S301`, `S311`, `S324`, `S501`–`S503`, `S506`, `S602`/`S605`/`S607`, `S608`). Refuses cross-file class/function renames (`N801`/`N802`) — those belong to the parent. |
 | `security-fixer` | sonnet | security | `Read, Edit, MultiEdit` | `{"file":"...","applied":N,"refused":[{"test_id":"...","line":N,"reason":"..."}],"errors":[]}` | Per-file: apply concrete bandit fixes at all severity levels. Covers ~30 test_ids (B101→raise, B102→inline static/refuse dynamic, B105/106/107→env var, B108→tempfile, B201→`debug=False`, B301/302/306→json if possible, B311→`secrets`, B324→sha256, B501–503→`verify=True`, B506→`safe_load`, B602/605/607→arg list, B608→parameterized query if driver known, etc.). Refuses only when genuinely ambiguous — tries to fix everything. |
 | `test-writer` | sonnet | gen-tests | `Read, Write, Edit, MultiEdit, Glob, Bash` | `{"file":"...","tests_added":N,"collection_ok":bool,"errors":[]}` | Per-source-file: write golden + error + boundary tests for missing public symbols (functions, methods, async functions). Never overwrites an existing test. Never emits `pytest.skip` stubs. Single `Write` or single `MultiEdit` per file. |
-| `test-fixer` | haiku | gen-tests | `Read, Edit, Glob, Bash` | `{"file":"...","fixed":N,"unfixable":N}` | Repair mechanical pytest failures (missing imports, wrong fixture names, bad arg counts) on test files only. Read-only on source. One-shot — the parent re-invokes if more iterations are needed (cap 3). |
+| `test-fixer` | haiku | *(unused — gen-tests now fixes source code directly)* | `Read, Edit, Glob, Bash` | `{"file":"...","fixed":N,"unfixable":N}` | Repair mechanical pytest failures (missing imports, wrong fixture names, bad arg counts) on test files only. Read-only on source. Retained as a standalone agent but no longer invoked by `gen-tests`; the parent skill now proposes source code improvements when tests fail. |
 | `doc-patcher` | sonnet | doc-sync | `Read, Glob, Grep, Edit, MultiEdit` | `{"file":"...","mode":"diff-patch\|template-fill","patched":bool,"reason":"..."}` | Per-doc: update ONE `docs/*.md` in place from code facts and an optional diff. Reads `index.md` plus the impacted doc only — never the full 6-doc set. ≤30 % rewrite cap; never invents identifiers; preserves French tone. |
 | `readme-patcher` | sonnet | readme-sync | `Read, Edit, MultiEdit` | `{"patched":bool,"sections_touched":[...]}` or `{"patched":false,"reason":"..."}` | Patches root `README.md` when a user-facing surface changes (CLI entries, env vars, deps). May return `patched:false` if signals fired but no semantics actually changed. Preserves French tone. |
 
@@ -417,7 +418,7 @@ All subagents are **silent**, return a single-line JSON result, and never run `g
     or:          poetry init -n && poetry install      → poetry pyproject)
 2. /plugin install bt-ai (from the marketplace)
 3. /bt-ai:proj-init
-   ├─ asks for runner if both uv and poetry present
+   ├─ asks for runner: venv or poetry (always asks)
    ├─ persists [tool.bt-ai].runner in pyproject.toml
    ├─ <runner> add (--dev | --group dev) ruff bandit pyright pytest pytest-cov gitlint-core
    ├─ creates .gitlint, .gitignore, docs/, README.md
@@ -453,10 +454,10 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 
 | Use case | Skill / command | How it is handled |
 |---|---|---|
-| New repo bootstrap | `proj-init` | Step A asks for runner (uv/poetry) and installs tools; B drops configs; C drops docs; D verifies |
+| New repo bootstrap | `proj-init` | Step A always asks for runner (venv/poetry) and installs tools; B drops configs; C drops docs; D verifies |
 | Fix lint on what I just changed | `check-style` | Diff-driven scope; two-pass (ruff first, model second); fan-out `style-fixer` for D1xx + N803/N806 + F821 + E999; parent handles N801/N802 cross-file; never halts |
 | Security audit on what I just changed | `security` | Bandit all-level scan; concrete fix proposal per finding; consent prompt once; fan-out `security-fixer` per file; agent tries to fix everything |
-| Tests for a new function | `gen-tests` (targeted) | Symbol extraction (incl. async def) → missing-only → fan-out `test-writer`; pytest collect → fan-out `test-fixer` if mechanical errors |
+| Tests for a new function | `gen-tests` (targeted) | Symbol extraction (incl. async def) → missing-only → fan-out `test-writer`; pytest verify → if failures, propose source code improvements (consent once, cap 2 iterations) |
 | Tests for whole feature branch | `gen-tests` (diff mode) | Same as above but scope = all changed `.py` |
 | Doc drift on architecture/data-model | `doc-sync` | Routing matrix; fan-out one `doc-patcher` per impacted doc; auto-applies returned patches |
 | README drift after API surface change | `readme-sync` | Five signals; `readme-patcher` patches `README.md` directly; auto-applies |
@@ -475,9 +476,9 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 
 ## 8. Tool choices and justifications
 
-### 8.1 `uv` or `poetry` (package manager)
+### 8.1 `venv` (via `uv`) or `poetry` (package manager)
 
-**Why both**: `proj-init` asks the user to choose between `uv` and `poetry`, persists the choice in `[tool.bt-ai].runner`, and every subsequent skill resolves the runner via `tools/resolve_runner.py`. Both managers run ad-hoc tools without polluting global Python (`uv run <tool>` / `poetry run <tool>`). Hatch and PDM are not currently supported.
+**Why both**: `proj-init` always asks the user to choose between `venv` and `poetry`, persists the choice in `[tool.bt-ai].runner`, and every subsequent skill resolves the runner via `tools/resolve_runner.py`. `venv` is backed by `uv` internally — `uv` manages standard virtual environments and runs tools via `uv run <tool>`. `poetry` uses `poetry run <tool>`. Hatch and PDM are not currently supported.
 
 **Why a runner key in `pyproject.toml`**: the alternative — re-detecting at every skill invocation by inspecting lockfiles — is brittle (a project may have stale `uv.lock` next to a fresh `poetry.lock` during a migration). Persisting the user's explicit choice removes the ambiguity.
 
@@ -503,7 +504,7 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 
 ### 8.5 `pytest` + `pytest-cov`
 
-**Why**: industry default; `pytest --collect-only` is what the parent uses to verify generated tests load before exiting `gen-tests`. On collection failure, the parent fans out `test-fixer` agents to repair mechanical errors (imports, fixture names, missing args) — up to 3 iterations before halting on a semantic failure. The pytest fragment enables `--strict-markers --strict-config` to catch typos in marker names early.
+**Why**: industry default; `pytest -q` is what the parent uses to verify generated tests pass after exiting the test-writer fan-out. On test failure, the parent proposes source code improvements (tests are the truth — the source is fixed, not the tests), asks consent once, and applies changes (cap 2 iterations). The pytest fragment enables `--strict-markers --strict-config` to catch typos in marker names early.
 
 ### 8.6 `gitlint-core` (commit message lint)
 
@@ -558,9 +559,9 @@ These exclusions are by design. Each one was a separate decision; the user opted
 - **No `--no-verify`** anywhere in the commit/push commands. Pre-commit hook failures are surfaced.
 - **No force-push**. `commit-push-pr` step 3 explicitly does not pass `--force`.
 - **One file per subagent.** Each fan-out agent edits exactly the file in its input — never another. Forbidden by the agent's hard rules; would cause write conflicts when the parent issues N parallel `Task` calls.
-- **Subagents do not run `git`/`gh`.** Staging, re-verification, and PR creation are the parent's job. Only `test-writer`/`test-fixer` use `Bash` (for `pytest --collect-only`).
+- **Subagents do not run `git`/`gh`.** Staging, re-verification, and PR creation are the parent's job. Only `test-writer` uses `Bash` (for pytest collection).
 - **Try everything, refuse only when ambiguous.** `security-fixer` attempts every finding including B102, B301/302/306, B608. Refuses only when genuinely ambiguous (exec with dynamic input, pickle with complex objects, SQL with unknown driver). Refused items surface in `refused[]` with structured reasons.
-- **Consent gate on security only.** `security` asks `Yes`/`No` once before fan-out (security fixes can alter program behavior). `check-style` auto-applies all fixes without prompting — two-pass architecture (ruff first, model second) ensures everything is either auto-fixed or reported as advisory.
+- **Consent gates.** `security` asks `Yes`/`No` once before fan-out (security fixes can alter program behavior). `gen-tests` asks `Yes`/`No` before modifying source code to satisfy failing tests. `check-style` auto-applies all fixes without prompting — two-pass architecture (ruff first, model second) ensures everything is either auto-fixed or reported as advisory.
 
 ### 10.2 Edge cases handled
 
@@ -578,8 +579,9 @@ These exclusions are by design. Each one was a separate decision; the user opted
 | No bandit findings at any level | security | No prompt; auxiliary scans run; final summary line |
 | User declines consent prompt | security | Findings reported, nothing modified, stop with success. |
 | All findings already covered by tests | gen-tests | `All changed files already have tests.` exit 0 |
-| Pytest collection fails on generated tests (mechanical) | gen-tests | Fan-out `test-fixer`; up to 3 iterations; halt verbatim if still failing |
-| Pytest collection fails on generated tests (semantic) | gen-tests | Halt verbatim, no auto-rewrite |
+| Pytest collection fails on generated tests | gen-tests | `collection_ok_all == false` → halt immediately with the failing file list |
+| Generated tests fail assertions | gen-tests | Propose source code improvements, ask consent once (`AskUserQuestion`), apply via `Edit`/`MultiEdit` to source files (cap 2 iterations). If still failing after 2 iterations, halt with count |
+| User declines source code improvements | gen-tests | Tests staged but failing. Stop with success — the user made a choice |
 | `style-fixer` cannot summarize a function from its signature | check-style | Agent returns `refused[]` with `cannot-summarize`; finding stays as advisory |
 | `security-fixer` cannot determine safe fix | security | Agent returns `refused[]` with structured reason (e.g., `exec-with-dynamic-input`, `unknown-db-driver`); surfaced in final summary |
 | Diff > 500 lines | doc-sync | Capped at 500; agent works on the head |
@@ -595,7 +597,7 @@ These exclusions are by design. Each one was a separate decision; the user opted
 
 Observed during empirical testing on real third-party projects:
 
-- **Both runners supported, but mixing is not.** `proj-init` asks the user to choose `uv` or `poetry` and persists the choice in `[tool.bt-ai].runner`. If the user later switches managers manually without re-running `proj-init`, the runner key may diverge from the actual lockfile state.
+- **Both runners supported, but mixing is not.** `proj-init` asks the user to choose `venv` or `poetry` and persists the choice in `[tool.bt-ai].runner`. `venv` maps to `uv` internally. If the user later switches managers manually without re-running `proj-init`, the runner key may diverge from the actual lockfile state.
 - **No default `extend-exclude` for generated code.** ANTLR parsers, protobuf stubs, etc. will produce noisy findings; projects with generated files need per-file ignores added manually.
 - **`gen-tests` package-name resolution** reads `[project] name` from `pyproject.toml`. Multi-namespace projects (where `from src.X` and `from <pkg>.Y` coexist) may receive imports tied to the wrong root.
 - **`doc-sync` is hardcoded to `docs/`.** Projects with root-level docs or a different docs root are not covered.
@@ -647,6 +649,6 @@ Current: `0.1.10`. Bump policy:
 
 Version history (highlights):
 
-- **0.1.10** — both `uv` and `poetry` runners supported, chosen at `proj-init`; runner persisted in `[tool.bt-ai].runner`. `gen-tests` covers `async def`. Per-file fan-out architecture for `check-style` (style-fixer), `security` (security-fixer), `gen-tests` (test-writer + test-fixer), and `doc-sync` (doc-patcher) — all `Task` calls in a single message, ≤10 per batch. Two-pass lint architecture: ruff fixes everything it can first, model fixes remaining (D1xx, N8xx, F821, E999). Two-bucket classification (model_fixable + advisory, no critical halt). Security scans all levels (no `-ll -ii`), proposes fixes for every finding, consent once, agent tries to fix everything. `style-fixer` and `security-fixer` agents now exist as standalone files.
+- **0.1.10** — `venv` (via `uv`) and `poetry` runners supported; `proj-init` always asks, even if only one is installed; runner persisted in `[tool.bt-ai].runner`. `gen-tests` covers `async def`. Per-file fan-out architecture for `check-style` (style-fixer), `security` (security-fixer), `gen-tests` (test-writer), and `doc-sync` (doc-patcher) — all `Task` calls in a single message, ≤10 per batch. Two-pass lint architecture: ruff fixes everything it can first, model fixes remaining (D1xx, N8xx, F821, E999, S* security codes). Two-bucket classification (model_fixable + advisory, no critical halt). Security scans all levels (no `-ll -ii`), proposes fixes for every finding, filters B101 from test files, consent once, agent tries to fix everything. `gen-tests` treats tests as the truth: when tests fail, proposes source code improvements (not test modifications), asks consent, applies via Edit/MultiEdit (cap 2 iterations). `style-fixer` handles S* codes (S113, S301, S311, S324, S501–S503, S506, S602/S605/S607, S608). `style-fixer` and `security-fixer` agents now exist as standalone files.
 
 The version is declared once in `.claude-plugin/plugin.json`. Skills do not embed it.
