@@ -45,7 +45,11 @@ No `-ll`, no `-ii`. Every finding at every severity/confidence level is captured
 
 Read the JSON in memory: `{"results": [{"filename", "line_number", "test_id", "issue_text", "issue_severity", "issue_confidence", "code", ...}, ...]}`.
 
-### If no findings
+### Filter out B101 from test files
+
+Remove any finding where `test_id == "B101"` AND the `filename` is under `tests/` (or matches `test_*.py` / `*_test.py`). Pytest uses `assert` by design — these are not security issues.
+
+### If no findings (after filtering)
 
 Continue to **auxiliary scans** below — nothing to fix.
 

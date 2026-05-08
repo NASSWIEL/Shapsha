@@ -59,8 +59,8 @@ The output is a JSON array. Each finding has fields `code`, `filename`, `locatio
 
 | Bucket | Codes | Routing |
 |---|---|---|
-| **`model_fixable[]`** | `D100`–`D107` with null `fix` (missing docstring — ruff cannot generate text), **plus** `N801`/`N802`/`N803`/`N806` (renames), **plus** `F821` (undefined name — model adds the missing import or fixes the reference), **plus** `E999` (syntax error — model reads the raw file and fixes the syntax) | Model edits via fan-out `style-fixer` (per-file) and parent (cross-file renames). |
-| **`advisory[]`** | Everything else: `B*`, `S*`, `C90*`, `PL*`, other `F*`/`E*` with null `fix` not listed above, and any `N*` outside the rename whitelist | Reported only — no automatic fix path. |
+| **`model_fixable[]`** | `D100`–`D107` with null `fix` (missing docstring), **plus** `N801`/`N802`/`N803`/`N806` (renames), **plus** `F821` (undefined name), **plus** `E999` (syntax error), **plus** `S*` codes where the LLM can compose a fix (S113 timeout, S301 pickle, S311 random, S324 weak hash, S501–S503 TLS, S506 yaml, S602/S605/S607 shell, S608 SQL, and others — see style-fixer for full list) | Model edits via fan-out `style-fixer` (per-file) and parent (cross-file renames). |
+| **`advisory[]`** | `C90*` (complexity — requires refactoring), `PL*` (pylint — architectural), and any code where the LLM genuinely cannot determine a safe fix from the code context | Reported only — no automatic fix path. |
 
 Hold the buckets in memory. **Do not print yet.** Branch below.
 
@@ -95,6 +95,15 @@ For `model_fixable[]` blocks, append a `→ <action>:` line that previews what t
 | `N806` | `→ Rename local variable \`<old>\` → \`<new>\` (lower_snake_case) inside this function.` |
 | `F821` | `→ Add missing import for \`<name>\` (inferred from usage context in this file).` |
 | `E999` | `→ Fix syntax error: <ruff message>. Model will read the file and repair.` |
+| `S113` | `→ Add \`timeout=30\` to the requests call.` |
+| `S301`/`S302` | `→ Replace pickle with \`json\` (if data is JSON-serializable).` |
+| `S311` | `→ Replace \`random.<fn>\` with \`secrets.<equivalent>\`.` |
+| `S324` | `→ Replace weak hash with \`sha256\` or add \`usedforsecurity=False\`.` |
+| `S501`–`S503` | `→ Enable certificate verification: \`verify=True\`.` |
+| `S506` | `→ Replace \`yaml.load()\` with \`yaml.safe_load()\`.` |
+| `S602`/`S605`/`S607` | `→ Replace \`shell=True\` with arg list.` |
+| `S608` | `→ Use parameterized query instead of f-string SQL.` |
+| Other `S*` | `→ Fix security issue: <ruff message>. Model reads context and applies fix.` |
 
 `<old>` (for N-codes) is extracted from the ruff `message` (it is usually quoted in backticks: ``Function name `getUser` should be lowercase``). Compute `<new>`:
 
