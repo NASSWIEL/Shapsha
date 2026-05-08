@@ -90,8 +90,8 @@ Two manifests describe the marketplace and the plugin separately. `marketplace.j
 | PR body | English subject, French body, 1–3 short bullets | one bullet per substantive change |
 | Branch naming | `<type>/<slug>` | enforced at step 1 of `commit-push-pr` |
 | Severity buckets (ruff) | 2 buckets: `model_fixable`, `advisory` (see §4.5). Ruff fixes everything it can in Pass 1; remaining findings are classified in Pass 2 |
-| Bandit threshold | severity ≥ MEDIUM AND confidence ≥ MEDIUM (`-ll -ii`) |
-| Bandit blocking criterion | severity == HIGH AND confidence == HIGH (the `blocked[]` bucket) |
+| Bandit threshold | All levels — no severity or confidence filter (no `-ll -ii`) |
+| Bandit fix approach | Every finding gets a concrete fix proposal; consent once; fan-out fixes all (see §4.6) |
 | Test location | `tests/foo/test_bar.py` mirroring `src/foo/bar.py` |
 | Silent execution | mandatory — no narration |
 | Skill auto-invocation | disabled — `disable-model-invocation: true` everywhere |
@@ -155,17 +155,19 @@ The pattern is verified across all five skills.
 
 Display rule: every remaining finding renders as a 3-line code snippet so the user sees what the model is about to change. No `AskUserQuestion` — fixes are applied automatically after display.
 
-### 4.6 HIGH/HIGH-only blocking, with refuse-on-intent inside the agent
+### 4.6 All-level scanning, consent once, fix everything possible
 
-Bandit findings can be syntactic (e.g., `assert` in tests) or semantic (e.g., `eval`). The plugin's gate is simple: only **HIGH severity AND HIGH confidence** findings (`blocked[]`) are surfaced for fix; everything else is rolled into a single advisory count. This eliminates the fatigue of MEDIUM-confidence "you should look at this".
+Bandit scans **all severity and confidence levels** — no `-ll -ii` filter. Every finding gets a concrete fix proposal grounded in the actual source code. The parent shows the full list with proposals and asks consent **once** for the whole batch via `AskUserQuestion`.
 
-Inside the `blocked[]` bucket, the parent composes a concrete fix proposal per finding (line-grounded, with a per-test_id template — see `security` skill for the table) and asks consent **once** for the whole batch. On `Yes`, the parent does **not** edit files itself: it groups blocked findings by filename and **fans out one `security-fixer` subagent per file in parallel**. The agent applies what was approved, but **refuses on intent-bearing findings** with a structured `refused[]` list:
+On `Yes`, the parent groups findings by filename and **fans out one `security-fixer` subagent per file in parallel**. The agent tries to fix everything — including codes that were previously refused (B102, B301/B302/B306, B608). The agent only refuses when it genuinely cannot determine a safe replacement from the code context:
 
-- `B102` (`exec`), `B301`/`B302`/`B306` (pickle/marshal/xml), `B608` (SQL injection via f-string) → `manual-review-required`;
-- `B311` flagged outside crypto context, TLS protocol downgrades (`B502`/`B503`), shell command-string interpolation → `agent-cannot-judge-context`;
-- Anything the agent could not match to the proposed line → `unclear-fix`.
+- `B102` (`exec`) with dynamic user input → `exec-with-dynamic-input` (static strings are inlined);
+- `B301`/`B302`/`B306` (pickle) with complex custom objects → `pickle-for-complex-objects` (simple data is converted to JSON);
+- `B608` (SQL injection) with unidentifiable DB driver → `unknown-db-driver` (known drivers get parameterized queries);
+- Shell commands with pipes/redirects/`&&` → `complex-shell-syntax`;
+- Anything the agent cannot match to the proposed line → `ambiguous-fix`.
 
-The refused items are surfaced in the post-fix summary and counted as remaining advisories — never silently dropped, never fabricated into a fix.
+The refused items are surfaced in the post-fix summary — never silently dropped, never fabricated into a fix. On `No`, the findings are reported but nothing is modified.
 
 ### 4.7 Subagent context isolation and parallel fan-out
 
@@ -260,21 +262,21 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 #### `/bt-ai:security`
 
-**Use case**: scan changed Python files for security issues at a useful signal-to-noise ratio.
+**Use case**: scan changed Python files for security issues at all severity levels, propose fixes for everything, fix on approval.
 
-**Engine**: `<runner> run bandit -f json -ll -ii <files>` — `-ll` filters severity ≥ MEDIUM, `-ii` filters confidence ≥ MEDIUM.
+**Engine**: `<runner> run bandit -f json <files>` — no severity or confidence filter. Every finding at every level is captured.
 
-**Classification**: each result lands in `blocked[]` (HIGH severity AND HIGH confidence) or `advisory[]` (everything else). Only `blocked[]` triggers a fix proposal; `advisory[]` is reported in the final summary line.
+**Fix proposals**: for every finding, the parent reads the source line and composes a concrete proposed fix grounded in the actual code (per-test_id template table in the skill body, expanded to ~30 codes). Unknown codes get an LLM-composed fix based on surrounding context — generic "manual review" is a last resort.
 
 **Decision point**:
-- `len(blocked) == 0` → continue to auxiliary scans (`pip-audit`, `detect-secrets` — opportunistic, advisory only).
-- `len(blocked) > 0` → for each blocked finding, the parent reads the source line and composes a concrete proposed fix grounded in the actual code (per-test_id template — see §4.6 and the skill body). Print the consolidated proposal block, then `AskUserQuestion` once with options `Yes` / `No`.
-- `No` → halt with non-zero exit; skip auxiliary scans.
-- `Yes` → fan-out to `security-fixer` (one subagent per impacted file, **all `Task` calls in a single message**). Each agent receives the proposals approved for its file and applies them via `Edit`/`MultiEdit`. Re-run bandit to verify; halt if HIGH/HIGH remain.
+- No findings → continue to auxiliary scans.
+- Findings exist → display all with `[severity/confidence]` prefix, grouped by file, each with `→ Proposed fix:`. Then `AskUserQuestion` once: `Yes` (apply all) / `No` (skip fixing).
+- `No` → findings reported, nothing modified, stop with success.
+- `Yes` → fan-out one `security-fixer` per file (**all `Task` calls in a single message**). Agent tries to fix everything; refuses only when genuinely ambiguous. Re-run bandit to verify.
 
 **Auxiliary scans** (run only when the tool is installed): `pip-audit --strict` for dependency CVEs; `detect-secrets scan --baseline /dev/null` for hardcoded credentials in changed files. Either may report `n/a` if absent.
 
-**Output**: `Security: <advisory_count> advisory bandit finding(s), <deps_vulns> dependency vuln(s), <secrets_found> potential secret(s). No HIGH/HIGH blocks.` Each segment whose tool is `n/a` is omitted.
+**Output**: `Security: <applied> fixed, <refused> could not be auto-fixed, <remaining> remaining, <deps_vulns> dependency vuln(s), <secrets_found> potential secret(s).` Each segment whose tool is `n/a` is omitted.
 
 #### `/bt-ai:gen-tests`
 
@@ -338,7 +340,7 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 **Eight steps**:
 1. `check-style` — two-pass: ruff auto-fixes, then model fixes remaining. Never halts (no prompt).
-2. `security` — halt if `blocked[]` HIGH/HIGH remain or user declined the fix prompt.
+2. `security` — scans all levels, proposes fixes, asks consent once. Halt if user declines or findings remain after fix.
 3. `gen-tests` (diff mode) — halt on subagent failure or pytest collection failure that survives 3 `test-fixer` iterations.
 4. `pytest -q` — halt on test failure; emits the captured tail.
 5. `doc-sync` — auto-applies; halt only if a patch fails to apply.
@@ -382,7 +384,7 @@ Six subagents live under `agents/`. Each runs in an isolated context, in silent 
 | Agent | Model | Used by | Tools | Output | Role |
 |-------|-------|---------|-------|--------|------|
 | `style-fixer` | sonnet | check-style | `Read, Edit, MultiEdit` | `{"file":"...","docstrings":N,"renames_local":N,"code_fixes":N,"refused":[...],"errors":[]}` | Per-file: insert Google-style docstrings for `D100`–`D107` findings ruff cannot fix itself; rename arguments/locals (`N803`/`N806`) within the enclosing function only; add missing imports (`F821`); fix syntax errors (`E999`). Refuses cross-file class/function renames (`N801`/`N802`) — those belong to the parent. |
-| `security-fixer` | sonnet | security | `Read, Edit, MultiEdit` | `{"file":"...","applied":N,"refused":[{"test_id":"...","line":N,"reason":"..."}],"errors":[]}` | Per-file: apply concrete bandit HIGH/HIGH fixes the parent already proposed (B101→raise, B105/106/107→env var, B201→`debug=False`, B311→`secrets`, B324→sha256 / `usedforsecurity=False`, B501–503→`verify=True`, B602/605/607→arg list). Refuses intent-bearing findings (B102, B301/302/306, B608) with a structured reason. |
+| `security-fixer` | sonnet | security | `Read, Edit, MultiEdit` | `{"file":"...","applied":N,"refused":[{"test_id":"...","line":N,"reason":"..."}],"errors":[]}` | Per-file: apply concrete bandit fixes at all severity levels. Covers ~30 test_ids (B101→raise, B102→inline static/refuse dynamic, B105/106/107→env var, B108→tempfile, B201→`debug=False`, B301/302/306→json if possible, B311→`secrets`, B324→sha256, B501–503→`verify=True`, B506→`safe_load`, B602/605/607→arg list, B608→parameterized query if driver known, etc.). Refuses only when genuinely ambiguous — tries to fix everything. |
 | `test-writer` | sonnet | gen-tests | `Read, Write, Edit, MultiEdit, Glob, Bash` | `{"file":"...","tests_added":N,"collection_ok":bool,"errors":[]}` | Per-source-file: write golden + error + boundary tests for missing public symbols (functions, methods, async functions). Never overwrites an existing test. Never emits `pytest.skip` stubs. Single `Write` or single `MultiEdit` per file. |
 | `test-fixer` | haiku | gen-tests | `Read, Edit, Glob, Bash` | `{"file":"...","fixed":N,"unfixable":N}` | Repair mechanical pytest failures (missing imports, wrong fixture names, bad arg counts) on test files only. Read-only on source. One-shot — the parent re-invokes if more iterations are needed (cap 3). |
 | `doc-patcher` | sonnet | doc-sync | `Read, Glob, Grep, Edit, MultiEdit` | `{"file":"...","mode":"diff-patch\|template-fill","patched":bool,"reason":"..."}` | Per-doc: update ONE `docs/*.md` in place from code facts and an optional diff. Reads `index.md` plus the impacted doc only — never the full 6-doc set. ≤30 % rewrite cap; never invents identifiers; preserves French tone. |
@@ -453,7 +455,7 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 |---|---|---|
 | New repo bootstrap | `proj-init` | Step A asks for runner (uv/poetry) and installs tools; B drops configs; C drops docs; D verifies |
 | Fix lint on what I just changed | `check-style` | Diff-driven scope; two-pass (ruff first, model second); fan-out `style-fixer` for D1xx + N803/N806 + F821 + E999; parent handles N801/N802 cross-file; never halts |
-| Security audit on what I just changed | `security` | Bandit MEDIUM/MEDIUM threshold, HIGH/HIGH blocking; concrete fix proposal per `blocked[]` finding; consent prompt; fan-out `security-fixer` per file |
+| Security audit on what I just changed | `security` | Bandit all-level scan; concrete fix proposal per finding; consent prompt once; fan-out `security-fixer` per file; agent tries to fix everything |
 | Tests for a new function | `gen-tests` (targeted) | Symbol extraction (incl. async def) → missing-only → fan-out `test-writer`; pytest collect → fan-out `test-fixer` if mechanical errors |
 | Tests for whole feature branch | `gen-tests` (diff mode) | Same as above but scope = all changed `.py` |
 | Doc drift on architecture/data-model | `doc-sync` | Routing matrix; fan-out one `doc-patcher` per impacted doc; auto-applies returned patches |
@@ -491,7 +493,7 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 
 ### 8.3 `bandit` (security)
 
-**Why**: standard SAST for Python. Filters with `-ll -ii` (≥ MEDIUM severity AND ≥ MEDIUM confidence) cut the long tail of low-confidence advisories. Only HIGH/HIGH findings (`blocked[]`) gate; everything else is rolled into a single advisory count. The `security-fixer` agent refuses on intent-bearing findings (§4.6) so a `Yes` to the consent prompt never silently rewrites code that needs human judgment.
+**Why**: standard SAST for Python. Scans all severity and confidence levels — no filter. Every finding gets a concrete fix proposal grounded in the actual source code. The `security-fixer` agent tries to fix everything and only refuses when it genuinely cannot determine a safe replacement (§4.6), so a `Yes` to the consent prompt maximises automated remediation.
 
 **Auxiliary scanners**: `pip-audit` (dependency CVEs) and `detect-secrets` (hardcoded credentials in changed files) run opportunistically when installed, advisory only — they never halt.
 
@@ -557,7 +559,7 @@ These exclusions are by design. Each one was a separate decision; the user opted
 - **No force-push**. `commit-push-pr` step 3 explicitly does not pass `--force`.
 - **One file per subagent.** Each fan-out agent edits exactly the file in its input — never another. Forbidden by the agent's hard rules; would cause write conflicts when the parent issues N parallel `Task` calls.
 - **Subagents do not run `git`/`gh`.** Staging, re-verification, and PR creation are the parent's job. Only `test-writer`/`test-fixer` use `Bash` (for `pytest --collect-only`).
-- **Refuse-on-intent for security.** `security-fixer` refuses `B102`/`B301`/`B302`/`B306`/`B608` and any line it cannot match to the proposal — they show up in `refused[]` with a structured reason and never become silent rewrites.
+- **Try everything, refuse only when ambiguous.** `security-fixer` attempts every finding including B102, B301/302/306, B608. Refuses only when genuinely ambiguous (exec with dynamic input, pickle with complex objects, SQL with unknown driver). Refused items surface in `refused[]` with structured reasons.
 - **Consent gate on security only.** `security` asks `Yes`/`No` once before fan-out (security fixes can alter program behavior). `check-style` auto-applies all fixes without prompting — two-pass architecture (ruff first, model second) ensures everything is either auto-fixed or reported as advisory.
 
 ### 10.2 Edge cases handled
@@ -573,13 +575,13 @@ These exclusions are by design. Each one was a separate decision; the user opted
 | Re-run on already-initialised project | `proj-init` | All targets identical → `proj-init complete. (no changes)` |
 | Empty changed-files list | check-style, security | `No .py files to lint.` / `No .py files to scan.` exit 0 |
 | Only `advisory` findings after ruff Pass 1 | check-style | Print advisory blocks with snippets; exit 0; no question |
-| `len(blocked) == 0` AND only advisory bandit findings | security | No prompt; auxiliary scans run; final summary line |
-| User declines consent prompt | security | Halt with non-zero (`Halted: <N> HIGH/HIGH security finding(s) require manual review.`). |
+| No bandit findings at any level | security | No prompt; auxiliary scans run; final summary line |
+| User declines consent prompt | security | Findings reported, nothing modified, stop with success. |
 | All findings already covered by tests | gen-tests | `All changed files already have tests.` exit 0 |
 | Pytest collection fails on generated tests (mechanical) | gen-tests | Fan-out `test-fixer`; up to 3 iterations; halt verbatim if still failing |
 | Pytest collection fails on generated tests (semantic) | gen-tests | Halt verbatim, no auto-rewrite |
 | `style-fixer` cannot summarize a function from its signature | check-style | Agent returns `refused[]` with `cannot-summarize`; finding stays as advisory |
-| `security-fixer` finds a refuse-on-intent code | security | Agent returns `refused[]` with structured reason; finding stays in advisory count after re-scan |
+| `security-fixer` cannot determine safe fix | security | Agent returns `refused[]` with structured reason (e.g., `exec-with-dynamic-input`, `unknown-db-driver`); surfaced in final summary |
 | Diff > 500 lines | doc-sync | Capped at 500; agent works on the head |
 | Patch fails to apply | doc-sync, readme-sync | Print failure, continue with rest (doc-sync) or halt (readme-sync) |
 | All signals false | readme-sync | `No README change needed.` |
@@ -599,7 +601,7 @@ Observed during empirical testing on real third-party projects:
 - **`doc-sync` is hardcoded to `docs/`.** Projects with root-level docs or a different docs root are not covered.
 - **`readme-sync`'s `deps_added` regex** (`^[+-]\s*"[a-zA-Z]`) can false-fire on `authors`, `classifiers`, or `keywords` array changes; the agent typically returns `patched:false` in those cases, but the signal flagging is conservative.
 - **Cross-file rename heuristics** (`N801`/`N802`) rely on a word-boundary `Grep` plus per-file confirmation. A symbol that appears as a substring inside an unrelated string literal can produce a false hit; the parent reads each match before applying `MultiEdit`, but for class names that double as common English words the user may want to review the diff.
-- **Security agent refuses on intent.** `B102`/`B301`/`B302`/`B306`/`B608` and similar codes are returned as `refused[]` with a structured reason; they show up in the post-fix advisory count but are never auto-rewritten. This is the intended trade-off — never the result of an unfixable bug.
+- **Security agent tries everything but has limits.** The agent attempts all findings including B102/B301/B302/B306/B608 — but refuses when the code context is genuinely ambiguous (exec with dynamic input, pickle with custom objects, SQL with unknown DB driver, complex shell syntax). Refused items are surfaced with structured reasons in the final summary.
 
 These boundaries are observable from the outside; they are documented here as the honest limits of `v0.1.10`.
 
@@ -641,10 +643,10 @@ Current: `0.1.10`. Bump policy:
 
 - patch (`0.1.x`) for bug fixes that do not change skill surface or output format;
 - minor (`0.x.0`) for new skills, new agents, or new options on existing skills;
-- major (`x.0.0`) for changes to severity buckets, the HIGH/HIGH blocking criterion, or any backwards-incompatible output format change.
+- major (`x.0.0`) for changes to severity classification, the consent/fix model, or any backwards-incompatible output format change.
 
 Version history (highlights):
 
-- **0.1.10** — both `uv` and `poetry` runners supported, chosen at `proj-init`; runner persisted in `[tool.bt-ai].runner`. `gen-tests` covers `async def`. Per-file fan-out architecture for `check-style` (style-fixer), `security` (security-fixer), `gen-tests` (test-writer + test-fixer), and `doc-sync` (doc-patcher) — all `Task` calls in a single message, ≤10 per batch. Two-pass lint architecture: ruff fixes everything it can first, model fixes remaining (D1xx, N8xx, F821, E999). Two-bucket classification (model_fixable + advisory, no critical halt). HIGH/HIGH-only bandit blocking. Consent gate on security only. `style-fixer` and `security-fixer` agents now exist as standalone files.
+- **0.1.10** — both `uv` and `poetry` runners supported, chosen at `proj-init`; runner persisted in `[tool.bt-ai].runner`. `gen-tests` covers `async def`. Per-file fan-out architecture for `check-style` (style-fixer), `security` (security-fixer), `gen-tests` (test-writer + test-fixer), and `doc-sync` (doc-patcher) — all `Task` calls in a single message, ≤10 per batch. Two-pass lint architecture: ruff fixes everything it can first, model fixes remaining (D1xx, N8xx, F821, E999). Two-bucket classification (model_fixable + advisory, no critical halt). Security scans all levels (no `-ll -ii`), proposes fixes for every finding, consent once, agent tries to fix everything. `style-fixer` and `security-fixer` agents now exist as standalone files.
 
 The version is declared once in `.claude-plugin/plugin.json`. Skills do not embed it.
