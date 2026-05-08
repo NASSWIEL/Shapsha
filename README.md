@@ -24,7 +24,7 @@ ruff, bandit, pyright, pytest, gitlint-core sont installés par `proj-init` dans
 | Commande | Quand | Ce qu'elle fait |
 |---|---|---|
 | `/bt-ai:proj-init` | Une fois, à la création du projet | Demande le choix venv/poetry, installe les outils, dépose les configs et templates de docs |
-| `/bt-ai:check-style` | Après modification de fichiers `.py` | Deux passes : ruff corrige tout ce qu'il peut (`--fix --unsafe-fixes`), puis le modèle corrige le reste (docstrings `D1xx`, renommages `N8xx`, imports manquants `F821`, erreurs de syntaxe `E999`, codes sécurité `S*`) en fan-out parallèle. Ne s'arrête jamais — tout est corrigé ou signalé |
+| `/bt-ai:check-style` | Après modification de fichiers `.py` | Deux passes : ruff corrige tout ce qu'il peut (`--fix --unsafe-fixes`), puis le modèle corrige **tout** le reste (docstrings, renommages, imports, syntaxe, sécurité, complexité, refactoring) en fan-out parallèle. Pas de bucket « advisory » — tout est corrigé ou refusé avec raison |
 | `/bt-ai:security` | Après modification de fichiers `.py` | Lance bandit sur tous les niveaux de sévérité. Propose un fix concret pour chaque finding, demande consentement une fois, puis corrige tout via fan-out parallèle. L'agent tente de tout corriger — ne refuse que quand le contexte est réellement ambigu |
 | `/bt-ai:gen-tests` | Après ajout/modification de code applicatif | Génère des tests pytest en fan-out parallèle. Si les tests échouent, propose des améliorations du code source (pas des tests), demande consentement, applique (cap 2 itérations) |
 | `/bt-ai:doc-sync` | Après changement d'API publique | Patch minimal pour `docs/` et docstrings ; appliqué automatiquement |
@@ -41,7 +41,7 @@ ruff, bandit, pyright, pytest, gitlint-core sont installés par `proj-init` dans
 
 | # | Étape | Halt si |
 |---|---|---|
-| 1 | `check-style` | Jamais (tout est corrigé ou advisory) |
+| 1 | `check-style` | Jamais (tout est corrigé ou refusé avec raison) |
 | 2 | `security` | Utilisateur refuse le consentement ou findings restent après fix |
 | 3 | `gen-tests` (diff) | Tests échouent après 2 itérations d'amélioration du code source, ou utilisateur refuse les améliorations |
 | 4 | `pytest -q` (full suite) | Exit non-zero |
@@ -60,7 +60,7 @@ Contexte isolé, périmètre minimal, mode silent. Invoqués en parallèle par l
 
 | Agent | Modèle | Invoqué par | Rôle |
 |---|---|---|---|
-| `style-fixer` | Sonnet | `check-style` | Insère docstrings Google-style (`D1xx`), renomme arguments/variables locales (`N803`/`N806`), ajoute les imports manquants (`F821`), corrige les erreurs de syntaxe (`E999`), corrige les codes sécurité (`S113`, `S301`, `S311`, `S324`, `S501`–`S503`, `S506`, `S602`/`S605`/`S607`, `S608`) dans UN fichier. Refuse les renommages de classes/fonctions (`N801`/`N802`) — le parent les gère via Grep + MultiEdit |
+| `style-fixer` | Sonnet | `check-style` | Corrige **tous** les codes ruff restants dans UN fichier : docstrings (`D1xx`), renommages (`N8xx`), imports (`F821`), syntaxe (`E999`), sécurité (`S*`), complexité (`C901`, `PLR*`), et tout autre code. Refuse uniquement les renommages cross-fichier (`N801`/`N802`) et les fixes réellement ambigus |
 | `security-fixer` | Sonnet | `security` | Applique les fix bandit proposés par le parent dans UN fichier, tous niveaux de sévérité (~30 codes couverts). Tente de tout corriger — ne refuse que quand le contexte est réellement ambigu (exec dynamique, pickle objets complexes, SQL driver inconnu) |
 | `test-writer` | Sonnet | `gen-tests` | Génère les tests pytest manquants pour UN fichier source (golden + erreur + boundary). Ne réécrit jamais les tests existants. Pas de `pytest.skip` |
 | `test-fixer` | Haiku | *(inutilisé)* | Répare les échecs mécaniques pytest (imports, fixtures, args) sur UN fichier de test. Conservé mais plus invoqué par `gen-tests` — le parent propose désormais des améliorations du code source quand les tests échouent |
