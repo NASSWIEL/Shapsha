@@ -13,7 +13,7 @@ Plugin [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) qui r
 
 ## Pré-requis
 
-- [`uv`](https://docs.astral.sh/uv/) **ou** [`poetry`](https://python-poetry.org/) — `proj-init` détecte la forme du projet et propose le bon défaut.
+- [`uv`](https://docs.astral.sh/uv/) **ou** [`poetry`](https://python-poetry.org/) — `proj-init` demande toujours le choix (`venv` ou `poetry`). `venv` utilise `uv` sous le capot.
 - `git`.
 - [`gh`](https://cli.github.com) authentifié (`gh auth login`) — requis pour `commit-push-pr` et `preflight`.
 
@@ -23,7 +23,7 @@ ruff, bandit, pyright, pytest, gitlint-core sont installés par `proj-init` dans
 
 | Commande | Quand | Ce qu'elle fait |
 |---|---|---|
-| `/bt-ai:proj-init` | Une fois, à la création du projet | Détecte la forme du projet, choisit le runner, installe les outils, dépose les configs et templates de docs |
+| `/bt-ai:proj-init` | Une fois, à la création du projet | Demande le choix venv/poetry, installe les outils, dépose les configs et templates de docs |
 | `/bt-ai:check-style` | Après modification de fichiers `.py` | Deux passes : ruff corrige tout ce qu'il peut (`--fix --unsafe-fixes`), puis le modèle corrige le reste (docstrings `D1xx`, renommages `N8xx`, imports manquants `F821`, erreurs de syntaxe `E999`, codes sécurité `S*`) en fan-out parallèle. Ne s'arrête jamais — tout est corrigé ou signalé |
 | `/bt-ai:security` | Après modification de fichiers `.py` | Lance bandit sur tous les niveaux de sévérité. Propose un fix concret pour chaque finding, demande consentement une fois, puis corrige tout via fan-out parallèle. L'agent tente de tout corriger — ne refuse que quand le contexte est réellement ambigu |
 | `/bt-ai:gen-tests` | Après ajout/modification de code applicatif | Génère des tests pytest en fan-out parallèle. Si les tests échouent, propose des améliorations du code source (pas des tests), demande consentement, applique (cap 2 itérations) |
@@ -74,13 +74,13 @@ Inspirée du plugin [`commit-commands`](https://github.com/anthropics/claude-cod
 - **Silence par défaut.** L'utilisateur voit le diff, le résultat final, ou la halt-line. Pas de narration intermédiaire.
 - **Skills en tant que prompts**, pas state machines : prompts courts (≤ 100 lignes), contexte injecté via `!command` pré-exécuté, single-message incantation pour forcer les appels d'outils en parallèle.
 - **`allowed-tools` étroits** (`Bash(git status:*)` plutôt que `Bash`) pour éviter les confirmations sur le chemin heureux.
-- **`AskUserQuestion` uniquement pour l'ambiguïté réelle.** Seul `proj-init` (choix `uv`/`poetry`), `security` (consentement avant correction) et `gen-tests` (consentement avant modification du code source) en utilisent.
+- **`AskUserQuestion` uniquement pour l'ambiguïté réelle.** Seul `proj-init` (choix `venv`/`poetry`), `security` (consentement avant correction) et `gen-tests` (consentement avant modification du code source) en utilisent.
 - **Refus systématiques** : pas de `--no-verify`, pas de `--force` push, pas de push sur la branche par défaut.
 - **Hermétique.** Tous les helpers Python du plugin vivent sous `${CLAUDE_PLUGIN_ROOT}/tools/`. Aucun script auxiliaire n'est jamais écrit dans le repo de l'utilisateur.
 
 ## Runner dispatch
 
-Skills et agents lisent `[tool.bt-ai].runner` dans `pyproject.toml` (défaut : `uv`) via `tools/resolve_runner.py`, puis invoquent les outils via `$R run <tool>`. Le choix est fait une fois par `proj-init` et reste cohérent ensuite.
+Skills et agents lisent `[tool.bt-ai].runner` dans `pyproject.toml` (`venv` ou `poetry`) via `tools/resolve_runner.py`, puis invoquent les outils via `<runner> run <tool>`. `venv` utilise `uv` sous le capot. Le choix est fait une fois par `proj-init` (qui demande toujours) et reste cohérent ensuite.
 
 `gitlint-core` est utilisé à la place de `gitlint` pour éviter la dépendance `sh` (qui échoue à compiler sur Windows à cause de `fcntl`).
 

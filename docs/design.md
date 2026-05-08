@@ -81,8 +81,8 @@ Two manifests describe the marketplace and the plugin separately. `marketplace.j
 | Marketplace name | `CGI-BT-AI` | repo + folder |
 | Layout | plugin at repo root | single-plugin marketplace |
 | Distribution | git clone + `/plugin install` | personal GitHub |
-| Python toolchain | `uv` **or** `poetry`, chosen at `proj-init` time | `ruff`, `bandit`, `pyright`, `pytest`, `pytest-cov`, `gitlint-core` |
-| Runner persistence | `[tool.bt-ai].runner = "uv"|"poetry"` in `pyproject.toml` | resolved by `tools/resolve_runner.py` |
+| Python toolchain | `venv` (via `uv`) **or** `poetry`, chosen at `proj-init` time | `ruff`, `bandit`, `pyright`, `pytest`, `pytest-cov`, `gitlint-core` |
+| Runner persistence | `[tool.bt-ai].runner = "venv"|"poetry"` in `pyproject.toml` | resolved by `tools/resolve_runner.py` (`venv` maps to `uv` internally) |
 | Plugin repo README | French (dev-facing) | |
 | Template README (proj-init drops) | French (user project) | |
 | Doc templates | French | |
@@ -360,7 +360,7 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 **Use case**: bootstrap a new (or partly initialised) project with the team's standards.
 
-**Step A — choose runner and install dev tools**: if both `uv` and `poetry` are installed, `AskUserQuestion` for the user's preferred runner; otherwise infer from the lockfile present (`uv.lock` → `uv`, `poetry.lock` → `poetry`); fall back to `uv` if neither is present. The choice is persisted in `[tool.bt-ai].runner` in `pyproject.toml`. Then:
+**Step A — choose runner and install dev tools**: always `AskUserQuestion` for `venv` or `poetry` (even if only one tool is installed). `venv` is backed by `uv` internally. The choice is persisted as `[tool.bt-ai].runner = "venv"|"poetry"` in `pyproject.toml`. Then:
 
 ```
 uv add --dev   ruff bandit pyright pytest pytest-cov gitlint-core   # if runner == uv
@@ -418,7 +418,7 @@ All subagents are **silent**, return a single-line JSON result, and never run `g
     or:          poetry init -n && poetry install      → poetry pyproject)
 2. /plugin install bt-ai (from the marketplace)
 3. /bt-ai:proj-init
-   ├─ asks for runner if both uv and poetry present
+   ├─ asks for runner: venv or poetry (always asks)
    ├─ persists [tool.bt-ai].runner in pyproject.toml
    ├─ <runner> add (--dev | --group dev) ruff bandit pyright pytest pytest-cov gitlint-core
    ├─ creates .gitlint, .gitignore, docs/, README.md
@@ -454,7 +454,7 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 
 | Use case | Skill / command | How it is handled |
 |---|---|---|
-| New repo bootstrap | `proj-init` | Step A asks for runner (uv/poetry) and installs tools; B drops configs; C drops docs; D verifies |
+| New repo bootstrap | `proj-init` | Step A always asks for runner (venv/poetry) and installs tools; B drops configs; C drops docs; D verifies |
 | Fix lint on what I just changed | `check-style` | Diff-driven scope; two-pass (ruff first, model second); fan-out `style-fixer` for D1xx + N803/N806 + F821 + E999; parent handles N801/N802 cross-file; never halts |
 | Security audit on what I just changed | `security` | Bandit all-level scan; concrete fix proposal per finding; consent prompt once; fan-out `security-fixer` per file; agent tries to fix everything |
 | Tests for a new function | `gen-tests` (targeted) | Symbol extraction (incl. async def) → missing-only → fan-out `test-writer`; pytest verify → if failures, propose source code improvements (consent once, cap 2 iterations) |
@@ -476,9 +476,9 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 
 ## 8. Tool choices and justifications
 
-### 8.1 `uv` or `poetry` (package manager)
+### 8.1 `venv` (via `uv`) or `poetry` (package manager)
 
-**Why both**: `proj-init` asks the user to choose between `uv` and `poetry`, persists the choice in `[tool.bt-ai].runner`, and every subsequent skill resolves the runner via `tools/resolve_runner.py`. Both managers run ad-hoc tools without polluting global Python (`uv run <tool>` / `poetry run <tool>`). Hatch and PDM are not currently supported.
+**Why both**: `proj-init` always asks the user to choose between `venv` and `poetry`, persists the choice in `[tool.bt-ai].runner`, and every subsequent skill resolves the runner via `tools/resolve_runner.py`. `venv` is backed by `uv` internally — `uv` manages standard virtual environments and runs tools via `uv run <tool>`. `poetry` uses `poetry run <tool>`. Hatch and PDM are not currently supported.
 
 **Why a runner key in `pyproject.toml`**: the alternative — re-detecting at every skill invocation by inspecting lockfiles — is brittle (a project may have stale `uv.lock` next to a fresh `poetry.lock` during a migration). Persisting the user's explicit choice removes the ambiguity.
 
@@ -597,7 +597,7 @@ These exclusions are by design. Each one was a separate decision; the user opted
 
 Observed during empirical testing on real third-party projects:
 
-- **Both runners supported, but mixing is not.** `proj-init` asks the user to choose `uv` or `poetry` and persists the choice in `[tool.bt-ai].runner`. If the user later switches managers manually without re-running `proj-init`, the runner key may diverge from the actual lockfile state.
+- **Both runners supported, but mixing is not.** `proj-init` asks the user to choose `venv` or `poetry` and persists the choice in `[tool.bt-ai].runner`. `venv` maps to `uv` internally. If the user later switches managers manually without re-running `proj-init`, the runner key may diverge from the actual lockfile state.
 - **No default `extend-exclude` for generated code.** ANTLR parsers, protobuf stubs, etc. will produce noisy findings; projects with generated files need per-file ignores added manually.
 - **`gen-tests` package-name resolution** reads `[project] name` from `pyproject.toml`. Multi-namespace projects (where `from src.X` and `from <pkg>.Y` coexist) may receive imports tied to the wrong root.
 - **`doc-sync` is hardcoded to `docs/`.** Projects with root-level docs or a different docs root are not covered.
@@ -649,6 +649,6 @@ Current: `0.1.10`. Bump policy:
 
 Version history (highlights):
 
-- **0.1.10** — both `uv` and `poetry` runners supported, chosen at `proj-init`; runner persisted in `[tool.bt-ai].runner`. `gen-tests` covers `async def`. Per-file fan-out architecture for `check-style` (style-fixer), `security` (security-fixer), `gen-tests` (test-writer), and `doc-sync` (doc-patcher) — all `Task` calls in a single message, ≤10 per batch. Two-pass lint architecture: ruff fixes everything it can first, model fixes remaining (D1xx, N8xx, F821, E999, S* security codes). Two-bucket classification (model_fixable + advisory, no critical halt). Security scans all levels (no `-ll -ii`), proposes fixes for every finding, filters B101 from test files, consent once, agent tries to fix everything. `gen-tests` treats tests as the truth: when tests fail, proposes source code improvements (not test modifications), asks consent, applies via Edit/MultiEdit (cap 2 iterations). `style-fixer` handles S* codes (S113, S301, S311, S324, S501–S503, S506, S602/S605/S607, S608). `style-fixer` and `security-fixer` agents now exist as standalone files.
+- **0.1.10** — `venv` (via `uv`) and `poetry` runners supported; `proj-init` always asks, even if only one is installed; runner persisted in `[tool.bt-ai].runner`. `gen-tests` covers `async def`. Per-file fan-out architecture for `check-style` (style-fixer), `security` (security-fixer), `gen-tests` (test-writer), and `doc-sync` (doc-patcher) — all `Task` calls in a single message, ≤10 per batch. Two-pass lint architecture: ruff fixes everything it can first, model fixes remaining (D1xx, N8xx, F821, E999, S* security codes). Two-bucket classification (model_fixable + advisory, no critical halt). Security scans all levels (no `-ll -ii`), proposes fixes for every finding, filters B101 from test files, consent once, agent tries to fix everything. `gen-tests` treats tests as the truth: when tests fail, proposes source code improvements (not test modifications), asks consent, applies via Edit/MultiEdit (cap 2 iterations). `style-fixer` handles S* codes (S113, S301, S311, S324, S501–S503, S506, S602/S605/S607, S608). `style-fixer` and `security-fixer` agents now exist as standalone files.
 
 The version is declared once in `.claude-plugin/plugin.json`. Skills do not embed it.
