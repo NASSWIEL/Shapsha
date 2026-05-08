@@ -95,7 +95,7 @@ Two manifests describe the marketplace and the plugin separately. `marketplace.j
 | Test location | `tests/foo/test_bar.py` mirroring `src/foo/bar.py` |
 | Silent execution | mandatory — no narration |
 | Skill auto-invocation | disabled — `disable-model-invocation: true` everywhere |
-| Consent before edits | mandatory for `check-style` and `security` (`AskUserQuestion`); `doc-sync`/`readme-sync` auto-apply minimal patches |
+| Consent before edits | mandatory for `security` only (`AskUserQuestion`); `check-style`/`doc-sync`/`readme-sync` auto-apply |
 | Per-file fan-out | `check-style`, `security`, `gen-tests`, `doc-sync` each issue all `Task` calls in a single message (≤10 per batch) |
 
 ---
@@ -246,7 +246,7 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 **Decision point**: 
 - If `len(critical) > 0` → halt with the full critical listing and snippets. No question.
 - If only `advisory` findings exist → print them and exit 0. No question.
-- Otherwise → `AskUserQuestion` once with options `Yes` / `No`. On `Yes`, run the fix sequence below.
+- Otherwise → display all findings with snippets, then **immediately run the fix sequence** (no consent prompt — non-critical style fixes are always applied automatically).
 
 **Fix sequence (after `Yes`)**:
 1. `safe_fixable` → ruff `--fix` (mechanical: imports, whitespace, formatting, docstring stubs ruff can write itself, plus `B007`/`B009`/`B010`/`B011`, plus `S101` only on `tests/`). Ruff parallelises internally.
@@ -336,7 +336,7 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 **Use case**: pre-PR validation suite. Sequential, halt on first failure.
 
 **Eight steps**:
-1. `check-style` — halt if `critical` findings exist; otherwise auto-runs the consent prompt and fix sequence (preflight is interactive at this step).
+1. `check-style` — halt if `critical` findings exist; otherwise auto-fixes everything non-critical (no prompt).
 2. `security` — halt if `blocked[]` HIGH/HIGH remain or user declined the fix prompt.
 3. `gen-tests` (diff mode) — halt on subagent failure or pytest collection failure that survives 3 `test-fixer` iterations.
 4. `pytest -q` — halt on test failure; emits the captured tail.
@@ -557,7 +557,7 @@ These exclusions are by design. Each one was a separate decision; the user opted
 - **One file per subagent.** Each fan-out agent edits exactly the file in its input — never another. Forbidden by the agent's hard rules; would cause write conflicts when the parent issues N parallel `Task` calls.
 - **Subagents do not run `git`/`gh`.** Staging, re-verification, and PR creation are the parent's job. Only `test-writer`/`test-fixer` use `Bash` (for `pytest --collect-only`).
 - **Refuse-on-intent for security.** `security-fixer` refuses `B102`/`B301`/`B302`/`B306`/`B608` and any line it cannot match to the proposal — they show up in `refused[]` with a structured reason and never become silent rewrites.
-- **Consent gate.** `check-style` and `security` always ask `Yes`/`No` once before any model-driven edit; cancelled prompts halt with non-zero exit.
+- **Consent gate on security only.** `security` asks `Yes`/`No` once before fan-out (security fixes can alter program behavior). `check-style` auto-applies non-critical fixes without prompting (docstrings and renames are safe, mechanical changes).
 
 ### 10.2 Edge cases handled
 
@@ -573,7 +573,7 @@ These exclusions are by design. Each one was a separate decision; the user opted
 | Empty changed-files list | check-style, security | `No .py files to lint.` / `No .py files to scan.` exit 0 |
 | Only `advisory` findings, no `critical`/`safe_fixable`/`model_fixable` | check-style | Print advisory blocks with snippets; exit 0; no question |
 | `len(blocked) == 0` AND only advisory bandit findings | security | No prompt; auxiliary scans run; final summary line |
-| User declines consent prompt | check-style, security | Stop with success on check-style (`<K> non-critical finding(s) noted, no fixes applied.`); halt with non-zero on security (`Halted: <N> HIGH/HIGH security finding(s) require manual review.`) |
+| User declines consent prompt | security | Halt with non-zero (`Halted: <N> HIGH/HIGH security finding(s) require manual review.`). `check-style` has no consent prompt — fixes are automatic. |
 | All findings already covered by tests | gen-tests | `All changed files already have tests.` exit 0 |
 | Pytest collection fails on generated tests (mechanical) | gen-tests | Fan-out `test-fixer`; up to 3 iterations; halt verbatim if still failing |
 | Pytest collection fails on generated tests (semantic) | gen-tests | Halt verbatim, no auto-rewrite |

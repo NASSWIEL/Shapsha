@@ -121,15 +121,15 @@ Style: <N> non-critical finding(s) noted (no automatic fix available):
 
 If `len(critical) == 0` AND (`len(safe_fixable) > 0` OR `len(model_fixable) > 0`):
 
-1. Print every finding grouped by bucket, with snippets, so the user knows what each will become:
+1. Print every finding grouped by bucket, with snippets, so the user sees what will change:
 
    ```
-   Found <K> non-critical style finding(s):
+   Found <K> non-critical style finding(s) — fixing automatically:
 
-   --- ruff will auto-fix (<count_safe>) ---
+   --- ruff auto-fix (<count_safe>) ---
    <safe_fixable blocks with snippets>
 
-   --- I will fix manually with Edit/MultiEdit (<count_model>) ---
+   --- model auto-fix (<count_model>) ---
    <model_fixable blocks with snippets, each followed by its → action line>
 
    --- advisory only, no automatic fix (<count_advisory>) ---
@@ -138,23 +138,9 @@ If `len(critical) == 0` AND (`len(safe_fixable) > 0` OR `len(model_fixable) > 0`
 
    Omit a `---` section when its count is 0.
 
-2. Use the `AskUserQuestion` tool with one question:
-   - **header**: `Style fixes`
-   - **question**: `Do you want me to fix these non-critical issues?`
-   - **multiSelect**: `false`
-   - **options**:
-     - label `Yes`, description `Apply ruff auto-fixes and let me edit docstrings/renames manually`
-     - label `No`, description `Skip auto-fix; leave the code as-is`
+2. **Immediately** run the fix sequence below. No `AskUserQuestion` — non-critical style fixes are always applied automatically.
 
-3. On `No`:
-   ```
-   Style: <K> non-critical finding(s) noted, no fixes applied.
-   ```
-   Stop with success.
-
-4. On `Yes` → run the fix sequence below.
-
-### Fix sequence (only after `Yes` consent)
+### Fix sequence
 
 #### Step 1 — ruff auto-fix (mechanical)
 
@@ -262,8 +248,8 @@ Stop with success.
 ### Hard rules
 
 - **Halt on Critical = list with snippets, never ask.** Critical findings (`F*`, `E9*`) are real bugs; never offer to "fix" them. Always print the full list with snippets before halting.
-- **Show the code, not just file:line.** Every finding renders as a 3-line context block. The user must SEE what they are about to fix.
-- **Consent before edits.** For non-critical findings, `AskUserQuestion` once before any auto-fix or model edit.
+- **Show the code, not just file:line.** Every finding renders as a 3-line context block. The user must SEE what is about to change.
+- **No consent prompt for non-critical.** Non-critical fixes are applied automatically after displaying the findings. No `AskUserQuestion`.
 - **Read before Edit.** Every model-driven `Edit`/`MultiEdit` is preceded by a `Read` on the target file so `old_string` is grounded in real text, not paraphrased.
 - **Cross-file renames use Grep + MultiEdit.** Never rename a class/function in one file without checking callers project-wide first.
 - **Never invent behavior in a docstring.** The summary line must be derivable from the function name and body. If the function is non-trivial and you cannot summarize it from the signature alone, prefer a conservative one-liner over a fabricated description.

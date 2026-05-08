@@ -24,7 +24,7 @@ ruff, bandit, pyright, pytest, gitlint-core sont installés par `proj-init` dans
 | Commande | Quand | Ce qu'elle fait |
 |---|---|---|
 | `/bt-ai:proj-init` | Une fois, à la création du projet | Détecte la forme du projet, choisit le runner, installe les outils, dépose les configs et templates de docs |
-| `/bt-ai:check-style` | Après modification de fichiers `.py` | Lance ruff. Affiche chaque finding avec un extrait de code (3 lignes). Halt sur Critical (`F*`, `E9*`). Pour le reste, demande consentement avant de fixer : ruff fait les corrections mécaniques, le modèle complète les docstrings (`D1xx`) et applique les renommages (`N801`/`N802`/`N803`/`N806`) |
+| `/bt-ai:check-style` | Après modification de fichiers `.py` | Lance ruff. Affiche chaque finding avec un extrait de code (3 lignes). Halt sur Critical (`F*`, `E9*`). Pour le reste, corrige automatiquement : ruff fait les corrections mécaniques, le modèle insère les docstrings (`D1xx`) et applique les renommages (`N801`/`N802`/`N803`/`N806`) en parallèle |
 | `/bt-ai:security` | Après modification de fichiers `.py` | Lance bandit. Pour chaque HIGH/HIGH, propose un fix concret et demande consentement une fois pour tout corriger. MEDIUM reste advisory |
 | `/bt-ai:gen-tests` | Après ajout/modification de code applicatif | Génère des tests pytest, lance les tests, répare les échecs mécaniques (cap 3), interrompt sur échec sémantique |
 | `/bt-ai:doc-sync` | Après changement d'API publique | Patch minimal pour `docs/` et docstrings ; appliqué automatiquement |
