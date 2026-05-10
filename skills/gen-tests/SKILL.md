@@ -23,6 +23,10 @@ Three modes (decided from `$ARGUMENTS`):
 - All Python files (only used if $ARGUMENTS == "all"): !`python "${CLAUDE_PLUGIN_ROOT}/tools/list_changed.py" --all --no-tests 2>/dev/null`
 - Pytest version: !`python "${CLAUDE_PLUGIN_ROOT}/tools/resolve_runner.py" --probe pytest 2>/dev/null`
 
+## Operating mode
+
+**Silent.** Emit NO narrative text between tool calls — no "Fanning out…", no "Reading files…", no "Delegating to…". The user sees only tool calls and the final summary line. Every intermediate status belongs in the final summary, not as a standalone text block.
+
 ## Your task
 
 Generate the missing pytest tests for the resolved targets via **parallel fan-out** (one `test-writer` subagent per source file, all spawned in a single message), verify they collect+pass, auto-repair mechanical failures, and emit one summary line. Halt only when semantic failures (real assertion mismatches) remain — those need the human's judgment, not another retry.
@@ -107,17 +111,21 @@ If `collection_ok_all == false` → output `Halted: test collection failed.` fol
 
 ### Stage
 
-For each file in `files`, run `git add -- "<file>"`.
+Run `git add` in its own Bash call — **do not chain it with pytest**. If chained, pytest's exit code 1 will mask a successful stage and surface as a spurious error.
+
+```
+git add -- <space-separated test paths from files>
+```
 
 ### Verify
 
-Run pytest on all the freshly written test paths in one batch. Replace `<runner>` with the literal Runner value from the Context above:
+Run pytest in a **separate** Bash call after staging completes:
 
 ```
 <runner> run pytest -q --no-header --tb=short <space-separated test paths from files> 2>&1
 ```
 
-Read pytest's output. Build counters `passed`, `failed`, `errors` from the final pytest summary line.
+Replace `<runner>` with the literal Runner value from the Context above. Read pytest's output. Build counters `passed`, `failed`, `errors` from the final pytest summary line.
 
 #### If `failed == 0 && errors == 0`
 
@@ -201,6 +209,9 @@ Stop with success (the tests are written and staged, even if some fail).
 
 ### Hard rules
 
+- **Silent.** No narrative between tool calls. "Fanning out…", "Reading files…", "Delegating to…" are all forbidden. Only the final summary block is output.
+- **Never invoke `test-fixer`.** Mechanical failures are repaired directly by the parent (Step 2 of the failure triage). Do not spawn a `test-fixer` subagent.
+- **Stage and Verify in separate Bash calls.** Never chain `git add` and `pytest` in one command — pytest's exit code 1 will mask a successful stage.
 - **Fan-out parallèle**: les N appels `Task` partent dans **un seul message** du parent. Sériels = pénalité de 5-10× sur le wall-clock.
 - **Two failure categories, two responses.** Mechanical failures (wrong mock path, missing import) are fixed in the test file automatically — they are test-writer bugs, not source deficiencies. Semantic failures (bad assertions, wrong return value) are fixed in the source code, with user consent.
 - **Never weaken a test.** Never change test assertions, expected values, or expected exceptions. Never remove or skip a test case. Mechanical fixes touch only plumbing (patch target string, import statement, fixture name) — never the assertion logic.
