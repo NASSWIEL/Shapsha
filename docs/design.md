@@ -18,7 +18,7 @@ This document records what is implemented, the workflow it produces, the methodo
 The plugin's design intent is threefold:
 
 1. **Lower the cost of doing the right thing**: linting, security scanning, test generation, doc sync, README sync, commit hygiene, and PR creation are all behind one-line slash commands.
-2. **Keep the cost of getting it wrong**: auto-fix is scoped to changes that cannot alter program behaviour; consent is required before security fixes and before modifying source code to satisfy generated tests; everything else is either auto-fixed or reported as advisory.
+2. **Keep the cost of getting it wrong**: auto-fix is scoped to changes that cannot alter program behaviour; consent is required before security fixes and before modifying source code to satisfy generated tests; everything else is auto-fixed (the model tries to fix ALL findings — if it genuinely can't, it refuses with a reason).
 3. **Stay fast on multi-file work**: when several files need the same kind of mutation (per-file style fixes, per-file security fixes, per-file test generation, per-doc patching), the parent skill fans out one subagent per file in a single message. Subagents run in parallel; aggregate results come back as JSON.
 
 ---
@@ -89,7 +89,7 @@ Two manifests describe the marketplace and the plugin separately. `marketplace.j
 | Commit messages | English | Conventional Commits 1.0 |
 | PR body | English subject, French body, 1–3 short bullets | one bullet per substantive change |
 | Branch naming | `<type>/<slug>` | enforced at step 1 of `commit-push-pr` |
-| Severity buckets (ruff) | 2 buckets: `model_fixable`, `advisory` (see §4.5). Ruff fixes everything it can in Pass 1; remaining findings are classified in Pass 2 |
+| Severity buckets (ruff) | No buckets — all remaining findings go to the model. Ruff fixes everything it can in Pass 1; the model fixes everything else in Pass 2 (refuses with reason only when genuinely ambiguous) |
 | Bandit threshold | All levels — no severity or confidence filter (no `-ll -ii`) |
 | Bandit fix approach | Every finding gets a concrete fix proposal; consent once; fan-out fixes all (see §4.6) |
 | Test location | `tests/foo/test_bar.py` mirroring `src/foo/bar.py` |
@@ -142,16 +142,11 @@ The pattern is verified across all five skills.
 
 ### 4.5 Two-pass architecture: ruff first, model second
 
-`check-style` never halts — everything is either fixed or reported as advisory. The architecture uses ruff for cheap mechanical fixes, then the LLM for intelligent fixes ruff can't handle.
+`check-style` never halts — everything is either fixed or refused with a reason. No advisory bucket. The architecture uses ruff for cheap mechanical fixes, then the LLM for intelligent fixes ruff can't handle.
 
 **Pass 1 — ruff fixes everything it can:** `ruff check --fix --unsafe-fixes` with all enabled codes, then `ruff format`. This handles F401 (unused import), F541 (f-string without placeholders), F841 (unused variable), E/W/I/UP, D-fixable, B007/B009/B010/B011, and every other code ruff knows how to fix. One shell call, zero LLM tokens.
 
-**Pass 2 — re-scan, classify remaining into two buckets:**
-
-| Bucket | Codes | Routing |
-|---|---|---|
-| **`model_fixable`** | `D100`–`D107` (missing docstring), `N801`/`N802`/`N803`/`N806` (renames), `F821` (undefined name), `E999` (syntax error), **plus** `S*` security codes the LLM can fix (S113 timeout, S301 pickle, S311 random, S324 weak hash, S501-S503 TLS, S506 yaml, S602/S605/S607 shell, S608 SQL, and others) | Model edits: per-file work fans out to `style-fixer` subagents; cross-file renames (N801/N802) handled by parent via Grep + MultiEdit. |
-| **`advisory`** | `C90*` (complexity — requires refactoring), `PL*` (pylint — architectural), and any code where the LLM genuinely cannot determine a safe fix | Reported only — no automatic fix path. |
+**Pass 2 — re-scan, fix ALL remaining with the model.** No classification into buckets — every remaining finding goes to the model. `D1xx` (docstrings), `N8xx` (renames), `F821` (undefined name), `E999` (syntax error), `S*` (security), `C90*` (complexity — refactored by extracting helpers), `PL*` (pylint — refactored or fixed), and any other code. Per-file work fans out to `style-fixer` subagents; cross-file renames (N801/N802) handled by parent via Grep + MultiEdit. If the model genuinely cannot fix something, it refuses with a structured reason — but it tries first.
 
 Display rule: every remaining finding renders as a 3-line code snippet so the user sees what the model is about to change. No `AskUserQuestion` — fixes are applied automatically after display.
 
@@ -243,22 +238,22 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 **Use case**: lint changed Python files; auto-fix everything possible, never halt, never prompt.
 
-**Two-pass architecture** (see §4.5): Pass 1 runs `<runner> run ruff check --fix --unsafe-fixes` followed by `<runner> run ruff format` — ruff fixes everything it can (cheap, no LLM tokens). Pass 2 re-scans with `--output-format=json --no-fix` and classifies remaining findings into `model_fixable[]` (LLM can fix) or `advisory[]` (report only). `--force-exclude` is always passed so `[tool.ruff].extend-exclude` applies to explicit file lists.
+**Two-pass architecture** (see §4.5): Pass 1 runs `<runner> run ruff check --fix --unsafe-fixes` followed by `<runner> run ruff format` — ruff fixes everything it can (cheap, no LLM tokens). Pass 2 re-scans with `--output-format=json --no-fix` and sends ALL remaining findings to the model — no advisory bucket. `--force-exclude` is always passed so `[tool.ruff].extend-exclude` applies to explicit file lists.
 
 **Display**: every remaining finding (in any bucket) is printed with a 3-line code snippet. Each `model_fixable` block also previews the action (`→ Insert a Google-style function docstring under def <name>(...):`, `→ Add missing import for <name>`, etc.).
 
 **Decision point** (never halts):
 - No remaining findings → `Style: no findings (ruff fixed everything).` exit 0.
-- Only `advisory` → print them and exit 0.
-- `model_fixable` present → display all findings with snippets, then **immediately run the fix sequence** (no consent prompt).
+- No remaining findings → `Style: no findings (ruff fixed everything).` exit 0.
+- Findings remain → display all with snippets and action lines, then **immediately run the fix sequence** (no consent prompt).
 
 **Fix sequence**:
-1. `model_fixable` per-file → fan-out: one `style-fixer` subagent per impacted file, **all `Task` calls in a single message** (≤10 per batch). Each agent inserts D1xx docstrings, renames N803/N806 arguments/locals, adds missing imports (F821), and fixes syntax errors (E999) inside its own file. Aggregates `docstrings_total`, `renames_local_total`, `code_fixes_total`, `agent_refused[]`, `agent_errors[]`.
+1. All findings per-file → fan-out: one `style-fixer` subagent per impacted file, **all `Task` calls in a single message** (≤10 per batch). Each agent fixes D1xx docstrings, N803/N806 renames, F821 imports, E999 syntax, S* security, C90*/PL* complexity/refactoring, and any other code. Aggregates `docstrings_total`, `renames_local_total`, `code_fixes_total`, `security_fixes_total`, `refactors_total`, `agent_refused[]`, `agent_errors[]`.
 2. `model_fixable` cross-file (N801 class / N802 function renames) → handled by the **parent** via `Grep` (find every reference) + per-file `MultiEdit`. Subagents refuse these by design.
 3. Re-run ruff to verify.
 4. Stage only the files that were actually modified.
 
-**Output**: `Style: <fixed_count> auto-fixed, <remaining_advisory> advisory finding(s) remain.`
+**Output**: `Style: <fixed_count> fixed, <remaining> could not be auto-fixed.` (with refused reasons listed if any).
 
 #### `/bt-ai:security`
 
@@ -384,7 +379,7 @@ Six subagents live under `agents/`. Each runs in an isolated context, in silent 
 
 | Agent | Model | Used by | Tools | Output | Role |
 |-------|-------|---------|-------|--------|------|
-| `style-fixer` | sonnet | check-style | `Read, Edit, MultiEdit` | `{"file":"...","docstrings":N,"renames_local":N,"code_fixes":N,"security_fixes":N,"refused":[...],"errors":[]}` | Per-file: insert Google-style docstrings for `D100`–`D107` findings ruff cannot fix itself; rename arguments/locals (`N803`/`N806`) within the enclosing function only; add missing imports (`F821`); fix syntax errors (`E999`); fix security codes (`S113`, `S301`, `S311`, `S324`, `S501`–`S503`, `S506`, `S602`/`S605`/`S607`, `S608`). Refuses cross-file class/function renames (`N801`/`N802`) — those belong to the parent. |
+| `style-fixer` | sonnet | check-style | `Read, Edit, MultiEdit` | `{"file":"...","docstrings":N,"renames_local":N,"code_fixes":N,"security_fixes":N,"refactors":N,"refused":[...],"errors":[]}` | Per-file: fixes ALL ruff codes ruff left behind — docstrings (`D1xx`), renames (`N803`/`N806`), imports (`F821`), syntax (`E999`), security (`S*`), complexity refactoring (`C901`, `PLR*`), and any other code. Refuses only cross-file renames (`N801`/`N802`) and genuinely ambiguous fixes. |
 | `security-fixer` | sonnet | security | `Read, Edit, MultiEdit` | `{"file":"...","applied":N,"refused":[{"test_id":"...","line":N,"reason":"..."}],"errors":[]}` | Per-file: apply concrete bandit fixes at all severity levels. Covers ~30 test_ids (B101→raise, B102→inline static/refuse dynamic, B105/106/107→env var, B108→tempfile, B201→`debug=False`, B301/302/306→json if possible, B311→`secrets`, B324→sha256, B501–503→`verify=True`, B506→`safe_load`, B602/605/607→arg list, B608→parameterized query if driver known, etc.). Refuses only when genuinely ambiguous — tries to fix everything. |
 | `test-writer` | sonnet | gen-tests | `Read, Write, Edit, MultiEdit, Glob, Bash` | `{"file":"...","tests_added":N,"collection_ok":bool,"errors":[]}` | Per-source-file: write golden + error + boundary tests for missing public symbols (functions, methods, async functions). Never overwrites an existing test. Never emits `pytest.skip` stubs. Single `Write` or single `MultiEdit` per file. |
 | `test-fixer` | haiku | *(unused — gen-tests now fixes source code directly)* | `Read, Edit, Glob, Bash` | `{"file":"...","fixed":N,"unfixable":N}` | Repair mechanical pytest failures (missing imports, wrong fixture names, bad arg counts) on test files only. Read-only on source. Retained as a standalone agent but no longer invoked by `gen-tests`; the parent skill now proposes source code improvements when tests fail. |
@@ -561,7 +556,7 @@ These exclusions are by design. Each one was a separate decision; the user opted
 - **One file per subagent.** Each fan-out agent edits exactly the file in its input — never another. Forbidden by the agent's hard rules; would cause write conflicts when the parent issues N parallel `Task` calls.
 - **Subagents do not run `git`/`gh`.** Staging, re-verification, and PR creation are the parent's job. Only `test-writer` uses `Bash` (for pytest collection).
 - **Try everything, refuse only when ambiguous.** `security-fixer` attempts every finding including B102, B301/302/306, B608. Refuses only when genuinely ambiguous (exec with dynamic input, pickle with complex objects, SQL with unknown driver). Refused items surface in `refused[]` with structured reasons.
-- **Consent gates.** `security` asks `Yes`/`No` once before fan-out (security fixes can alter program behavior). `gen-tests` asks `Yes`/`No` before modifying source code to satisfy failing tests. `check-style` auto-applies all fixes without prompting — two-pass architecture (ruff first, model second) ensures everything is either auto-fixed or reported as advisory.
+- **Consent gates.** `security` asks `Yes`/`No` once before fan-out (security fixes can alter program behavior). `gen-tests` asks `Yes`/`No` before modifying source code to satisfy failing tests. `check-style` auto-applies all fixes without prompting — two-pass architecture (ruff first, model second) ensures everything is either auto-fixed or refused with a reason.
 
 ### 10.2 Edge cases handled
 
@@ -575,14 +570,14 @@ These exclusions are by design. Each one was a separate decision; the user opted
 | Network failure on `uv add` / `poetry add` | `proj-init` | Exit non-zero with stderr |
 | Re-run on already-initialised project | `proj-init` | All targets identical → `proj-init complete. (no changes)` |
 | Empty changed-files list | check-style, security | `No .py files to lint.` / `No .py files to scan.` exit 0 |
-| Only `advisory` findings after ruff Pass 1 | check-style | Print advisory blocks with snippets; exit 0; no question |
+| All findings after ruff Pass 1 are complex (C90*/PL*) | check-style | Model tries to fix all; refused items listed with reasons; exit 0 |
 | No bandit findings at any level | security | No prompt; auxiliary scans run; final summary line |
 | User declines consent prompt | security | Findings reported, nothing modified, stop with success. |
 | All findings already covered by tests | gen-tests | `All changed files already have tests.` exit 0 |
 | Pytest collection fails on generated tests | gen-tests | `collection_ok_all == false` → halt immediately with the failing file list |
 | Generated tests fail assertions | gen-tests | Propose source code improvements, ask consent once (`AskUserQuestion`), apply via `Edit`/`MultiEdit` to source files (cap 2 iterations). If still failing after 2 iterations, halt with count |
 | User declines source code improvements | gen-tests | Tests staged but failing. Stop with success — the user made a choice |
-| `style-fixer` cannot summarize a function from its signature | check-style | Agent returns `refused[]` with `cannot-summarize`; finding stays as advisory |
+| `style-fixer` cannot summarize a function from its signature | check-style | Agent returns `refused[]` with `cannot-summarize`; surfaced in final summary with reason |
 | `security-fixer` cannot determine safe fix | security | Agent returns `refused[]` with structured reason (e.g., `exec-with-dynamic-input`, `unknown-db-driver`); surfaced in final summary |
 | Diff > 500 lines | doc-sync | Capped at 500; agent works on the head |
 | Patch fails to apply | doc-sync, readme-sync | Print failure, continue with rest (doc-sync) or halt (readme-sync) |

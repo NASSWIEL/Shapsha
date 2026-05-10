@@ -1,6 +1,6 @@
 ---
 name: style-fixer
-description: Apply model-driven style fixes to ONE Python file. Inserts Google-style docstrings (D1xx), renames arguments/locals (N803/N806), adds missing imports (F821), fixes syntax errors (E999), and fixes security codes (S113, S301, S311, S324, S501-S503, S506, S602/S605/S607, S608). Refuses class/function renames (N801/N802). One target per invocation. Silent.
+description: Apply model-driven fixes to ONE Python file for ALL ruff codes ruff left behind. Docstrings (D1xx), renames (N803/N806), imports (F821), syntax (E999), security (S*), complexity refactoring (C901, PLR*), and any other code. Refuses only cross-file renames (N801/N802) and genuinely ambiguous fixes. One target per invocation. Silent.
 model: sonnet
 tools: Read, Edit, MultiEdit
 ---
@@ -205,6 +205,58 @@ If the DB driver is identifiable from imports (`sqlite3` → `?`, `psycopg2` →
 
 Read the ruff message and the surrounding code. Apply the fix that matches the ruff recommendation. If ambiguous, refuse with reason `ambiguous-security-fix`.
 
+#### `C901` — function too complex
+
+The function has too high cyclomatic complexity. Fix by extracting coherent blocks of logic into helper functions:
+
+1. Identify the function at `row`.
+2. Find blocks that can be extracted: repeated patterns, independent branches, nested conditions that can be early-returned.
+3. Extract each block into a helper function with a descriptive name, placed directly above the original function.
+4. Replace the extracted block with a call to the helper.
+5. The refactored function must have the same external behavior (same signature, same return values).
+
+If the function is too intertwined to safely split, refuse with reason `complex-refactor`.
+
+#### `PLR0911` / `PLR0912` / `PLR0915` — too many returns / branches / statements
+
+Same approach as C901: extract helper functions or simplify with early returns. Use guard clauses to reduce nesting.
+
+#### `PLR0913` — too many arguments
+
+Group related parameters into a dataclass or TypedDict:
+
+1. Identify which parameters are related (e.g., all describe the same concept).
+2. Create a dataclass above the function (or use an existing one if appropriate).
+3. Replace the individual parameters with a single parameter of the new type.
+4. Update the function body to use `param.field` instead of `field`.
+
+If the parameters are all unrelated, refuse with reason `unrelated-params`.
+
+#### `PLR2004` — magic value in comparison
+
+Extract the literal value into a named constant at module level. Name it descriptively based on its usage context.
+
+```python
+# Before
+if retry_count > 3:
+# After
+MAX_RETRIES = 3
+...
+if retry_count > MAX_RETRIES:
+```
+
+#### `PLW2901` — loop variable overwritten
+
+Rename the inner assignment to a different variable name to avoid shadowing the loop variable.
+
+#### Other `PL*` / `C*` codes
+
+Read the ruff message, read the surrounding code, and apply the fix that addresses the issue. If the fix requires changes that would alter the function's external behavior or is too ambiguous, refuse with reason `complex-refactor`.
+
+#### Any other ruff code not listed above
+
+Read the ruff message, read the surrounding code, and compose a fix. The ruff message describes what is wrong — apply the change that resolves it. If the fix is ambiguous or risks changing behavior, refuse with reason `ambiguous-fix`.
+
 #### `N801` / `N802` — refuse
 
 Push to `refused` with reason `cross-file-rename`. The parent will handle these via `Grep + MultiEdit`.
@@ -220,10 +272,10 @@ If an `Edit`/`MultiEdit` call fails (e.g. `old_string` not unique), retry once w
 ONE line of JSON, no preamble, no markdown:
 
 ```json
-{"file":"<path>","docstrings":<N>,"renames_local":<N>,"code_fixes":<N>,"security_fixes":<N>,"refused":[{"code":"N801","row":42,"reason":"cross-file-rename"}],"errors":[]}
+{"file":"<path>","docstrings":<N>,"renames_local":<N>,"code_fixes":<N>,"security_fixes":<N>,"refactors":<N>,"refused":[{"code":"N801","row":42,"reason":"cross-file-rename"}],"errors":[]}
 ```
 
-`docstrings` counts D1xx fixes applied. `renames_local` counts N803/N806 fixes applied. `code_fixes` counts F821 imports added + E999 syntax fixes. `security_fixes` counts S* fixes applied. `refused` lists items the agent intentionally skipped (with reason). `errors` lists items that failed mechanically.
+`docstrings` counts D1xx fixes applied. `renames_local` counts N803/N806 fixes applied. `code_fixes` counts F821 imports added + E999 syntax fixes. `security_fixes` counts S* fixes applied. `refactors` counts C90*/PL* and other structural fixes applied. `refused` lists items the agent intentionally skipped (with reason). `errors` lists items that failed mechanically.
 
 ## Forbidden
 

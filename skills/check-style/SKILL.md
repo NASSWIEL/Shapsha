@@ -1,6 +1,6 @@
 ---
 name: check-style
-description: "Lint des fichiers Python modifiés avec ruff. Deux passes : ruff corrige tout ce qu'il peut (--fix --unsafe-fixes), puis le modèle corrige le reste (docstrings D1xx, renommages N8xx, noms indéfinis F821, erreurs de syntaxe E999) en fan-out parallèle. Ne s'arrête jamais — tout est corrigé ou signalé."
+description: "Lint des fichiers Python modifiés avec ruff. Deux passes : ruff corrige tout ce qu'il peut (--fix --unsafe-fixes), puis le modèle corrige TOUT le reste (docstrings, renommages, imports, syntaxe, sécurité, complexité, refactoring) en fan-out parallèle. Pas de bucket advisory — tout est corrigé ou refusé avec raison."
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git status:*), Bash(git rev-parse:*), Read, Edit, MultiEdit, Grep
 ---
@@ -17,12 +17,12 @@ allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash
 
 ## Your task
 
-Two-pass architecture: **ruff fixes everything it can** (cheap, fast, no LLM tokens), then the **model fixes what ruff left behind** (docstrings, renames, undefined names, syntax errors). Never halts — everything is either fixed or reported as advisory.
+Two-pass architecture: **ruff fixes everything it can** (cheap, fast, no LLM tokens), then the **model fixes ALL of what ruff left behind** — no advisory bucket. Never halts — everything is either fixed or refused with a reason.
 
 - **Pass 1 — ruff** → `ruff --fix --unsafe-fixes` with all enabled codes, then `ruff format`. One shell call, ruff parallelises internally.
-- **Pass 2 — re-scan** → `ruff --no-fix --output-format=json`. Classify remaining findings into `model_fixable[]` (LLM can fix) or `advisory[]` (report only).
-- **`model_fixable[]` per-file work** → fan-out parallèle: **one `style-fixer` subagent per impacted file, in a single message**. Each agent handles `D1xx` docstrings, `N803`/`N806` renames, `F821` undefined names, and `E999` syntax errors inside its own file.
-- **`model_fixable[]` cross-file work** → done by the **parent**: `N801` (class) and `N802` (function) renames need `Grep` to find every caller, then `MultiEdit` per touched file. Subagents refuse these by design.
+- **Pass 2 — re-scan** → `ruff --no-fix --output-format=json`. ALL remaining findings go to the model.
+- **Per-file work** → fan-out parallèle: **one `style-fixer` subagent per impacted file, in a single message**. Each agent handles ALL codes: docstrings, renames, imports, syntax, security, complexity refactoring, and any other code.
+- **Cross-file work** → done by the **parent**: `N801` (class) and `N802` (function) renames need `Grep` to find every caller, then `MultiEdit` per touched file. Subagents refuse these by design.
 
 ### Guards
 
@@ -55,14 +55,9 @@ This handles F401, F541, F841, E/W/I/UP, D-fixable, B007/B009/B010/B011, and eve
 <runner> run ruff check <files> --force-exclude --output-format=json --no-fix 2>/dev/null || true
 ```
 
-The output is a JSON array. Each finding has fields `code`, `filename`, `location.row`, `location.column`, `message`, and `fix` (object or null). Everything ruff could fix is already gone. Classify what remains into **two** buckets:
+The output is a JSON array. Each finding has fields `code`, `filename`, `location.row`, `location.column`, `message`, and `fix` (object or null). Everything ruff could fix is already gone. **All remaining findings go to `model_fixable[]`** — there is no advisory bucket. The model fixes everything or refuses with a reason.
 
-| Bucket | Codes | Routing |
-|---|---|---|
-| **`model_fixable[]`** | `D100`–`D107` with null `fix` (missing docstring), **plus** `N801`/`N802`/`N803`/`N806` (renames), **plus** `F821` (undefined name), **plus** `E999` (syntax error), **plus** `S*` codes where the LLM can compose a fix (S113 timeout, S301 pickle, S311 random, S324 weak hash, S501–S503 TLS, S506 yaml, S602/S605/S607 shell, S608 SQL, and others — see style-fixer for full list) | Model edits via fan-out `style-fixer` (per-file) and parent (cross-file renames). |
-| **`advisory[]`** | `C90*` (complexity — requires refactoring), `PL*` (pylint — architectural), and any code where the LLM genuinely cannot determine a safe fix from the code context | Reported only — no automatic fix path. |
-
-Hold the buckets in memory. **Do not print yet.** Branch below.
+Hold the list in memory. **Do not print yet.** Branch below.
 
 ### Display remaining findings — every finding gets a code snippet
 
@@ -77,7 +72,7 @@ For every remaining finding (in any bucket), render a 3-line block. To get the s
 
 If the file does not have a previous/next line (top/bottom), omit that side. Plain ASCII; no colors.
 
-For `model_fixable[]` blocks, append a `→ <action>:` line that previews what the model will do:
+For every finding, append a `→ <action>:` line that previews what the model will do:
 
 | Code | Action line template |
 |---|---|
@@ -104,6 +99,13 @@ For `model_fixable[]` blocks, append a `→ <action>:` line that previews what t
 | `S602`/`S605`/`S607` | `→ Replace \`shell=True\` with arg list.` |
 | `S608` | `→ Use parameterized query instead of f-string SQL.` |
 | Other `S*` | `→ Fix security issue: <ruff message>. Model reads context and applies fix.` |
+| `C901` | `→ Refactor: extract helper functions to reduce cyclomatic complexity.` |
+| `C901` / `PLR0911` / `PLR0912` / `PLR0915` | `→ Refactor: simplify function to reduce branches/returns/statements.` |
+| `PLR0913` | `→ Refactor: group parameters into a dataclass or TypedDict.` |
+| `PLR2004` | `→ Replace magic value with a named constant.` |
+| `PLW2901` | `→ Use a different variable name to avoid overwriting the loop variable.` |
+| Other `PL*` / `C*` | `→ Fix: <ruff message>. Model reads context and refactors.` |
+| Any other code | `→ Fix: <ruff message>. Model reads context and applies fix.` |
 
 `<old>` (for N-codes) is extracted from the ruff `message` (it is usually quoted in backticks: ``Function name `getUser` should be lowercase``). Compute `<new>`:
 
@@ -114,7 +116,7 @@ For `model_fixable[]` blocks, append a `→ <action>:` line that previews what t
 
 ### Branch 1 — No remaining findings
 
-If both buckets are empty after Pass 1:
+If `model_fixable` is empty after Pass 1:
 
 ```
 Style: no findings (ruff fixed everything).
@@ -122,35 +124,17 @@ Style: no findings (ruff fixed everything).
 
 Stop with success.
 
-### Branch 2 — Only advisory remaining
-
-If `len(model_fixable) == 0` AND `len(advisory) > 0`:
-
-Print the advisory list with snippets, then stop with success:
-
-```
-Style: <N> advisory finding(s) noted (no automatic fix available):
-
-<advisory blocks with snippets>
-```
-
-### Branch 3 — Model-fixable findings present (with optional advisory)
+### Branch 2 — Findings remain — fix all with model
 
 If `len(model_fixable) > 0`:
 
-1. Print every remaining finding grouped by bucket, with snippets:
+1. Print all findings with snippets and action lines:
 
    ```
    Found <K> remaining finding(s) after ruff auto-fix — fixing with model:
 
-   --- model auto-fix (<count_model>) ---
-   <model_fixable blocks with snippets, each followed by its → action line>
-
-   --- advisory only, no automatic fix (<count_advisory>) ---
-   <advisory blocks with snippets>
+   <all blocks with snippets, each followed by its → action line>
    ```
-
-   Omit a `---` section when its count is 0.
 
 2. **Immediately** run the fix sequence below. No `AskUserQuestion`.
 
@@ -168,7 +152,7 @@ Each `Task` call invokes subagent `style-fixer` with this JSON payload:
 {
   "file": "<source path>",
   "model_fixable": [
-    {"code": "<D1xx or N803/N806 or F821 or E999>", "row": <int>, "col": <int>, "message": "<ruff message>"},
+    {"code": "<any ruff code>", "row": <int>, "col": <int>, "message": "<ruff message>"},
     ...
   ]
 }
@@ -185,7 +169,7 @@ Aggregate across all subagents:
 - `docstrings_total` = sum of `docstrings`
 - `renames_local_total` = sum of `renames_local`
 - `code_fixes_total` = sum of `code_fixes` (F821 imports added + E999 syntax fixes)
-- `agent_refused[]` = flat union of every `refused` list (these stay as advisory)
+- `agent_refused[]` = flat union of every `refused` list (surfaced in final summary with reasons)
 - `agent_errors[]` = flat union of every `errors` list
 
 If `agent_errors[]` is non-empty, surface them in the final summary but do not halt — the user can re-run.
@@ -214,7 +198,7 @@ If no `N801`/`N802` items exist in `model_fixable[]`, skip this step.
 <runner> run ruff check <files> --force-exclude --output-format=json --no-fix 2>/dev/null || true
 ```
 
-Compute `remaining_advisory` = count of findings from the new run, plus any `model_fixable` items the model could not fix (agent `refused[]` items).
+Compute `remaining` = count of findings from the new run (items the model could not fix end up in agent `refused[]`).
 
 #### Step 4 — stage modified files
 
@@ -226,17 +210,28 @@ for f in <touched files>; do git diff --quiet -- "$f" 2>/dev/null || git add -- 
 
 #### Final summary
 
+If `remaining == 0`:
 ```
-Style: <fixed_count> auto-fixed, <remaining_advisory> advisory finding(s) remain.
+Style: <fixed_count> fixed, 0 remaining.
 ```
 
-`fixed_count` = (initial `len(safe_fixable)` + initial `len(model_fixable)`) − (count of those same codes still present in the post-fix JSON).
+If `remaining > 0` (agent refused some items):
+```
+Style: <fixed_count> fixed, <remaining> could not be auto-fixed.
+
+Could not auto-fix:
+  - <filename>:<row> <code> — <reason from refused[]>
+  ...
+```
+
+`fixed_count` = initial `len(model_fixable)` − `remaining`.
 
 Stop with success.
 
 ### Hard rules
 
-- **Never halt.** Every finding is either auto-fixed (by ruff or the model) or reported as advisory. No `critical[]` bucket, no halting, no `AskUserQuestion`.
+- **Never halt.** Every finding is either auto-fixed (by ruff or the model) or refused with a reason. No `AskUserQuestion`.
+- **No advisory bucket.** The model tries to fix ALL remaining findings. If it genuinely cannot (e.g., ambiguous refactor), it refuses with a structured reason — but it tries first.
 - **Ruff first, model second.** Pass 1 lets ruff fix everything it can (cheap). Pass 2 uses the model only for what ruff left behind (smart). This minimises LLM token cost.
 - **Show the code, not just file:line.** Every remaining finding renders as a 3-line context block. The user must SEE what the model is about to change.
 - **Read before Edit.** Every model-driven `Edit`/`MultiEdit` is preceded by a `Read` on the target file so `old_string` is grounded in real text, not paraphrased.
@@ -244,4 +239,4 @@ Stop with success.
 - **Never invent behavior in a docstring.** The summary line must be derivable from the function name and body. If the function is non-trivial and you cannot summarize it from the signature alone, prefer a conservative one-liner over a fabricated description.
 - **`|| true` on ruff commands.** Ruff exits 1 when findings exist; the user must not see "Exit code 1" framed as an error.
 - **Stage only what you modified.** Never `git add -A`.
-- **Hermetic.** Never write classifier scripts, scratch JSON, or log files into the user's repo. The model classifies ruff's JSON output directly.
+- **Hermetic.** Never write classifier scripts, scratch JSON, or log files into the user's repo.

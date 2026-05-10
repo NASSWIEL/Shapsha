@@ -1,6 +1,6 @@
 ---
 name: security
-description: "Analyse de sécurité bandit sur les fichiers Python modifiés. Scanne tous les niveaux de sévérité, propose un fix concret pour chaque finding, demande consentement une fois, puis corrige tout via fan-out parallèle (un sous-agent security-fixer par fichier). Tout est corrigé ou signalé."
+description: "Analyse de sécurité en deux passes : bandit (tous niveaux de sévérité) puis passe LLM-native (auth, injection, logique métier, secrets, crypto, effets de second ordre — confidence HIGH uniquement). Findings fusionnés en all_findings[], consentement unique, fan-out parallèle un sous-agent security-fixer par fichier. Tout est corrigé ou signalé."
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git rev-parse:*), Bash(git add:*), Read
 ---
@@ -49,13 +49,38 @@ Read the JSON in memory: `{"results": [{"filename", "line_number", "test_id", "i
 
 Remove any finding where `test_id == "B101"` AND the `filename` is under `tests/` (or matches `test_*.py` / `*_test.py`). Pytest uses `assert` by design — these are not security issues.
 
-### If no findings (after filtering)
+Call the remaining bandit results `bandit_findings[]`.
+
+### Pass 2 — LLM security analysis (model-native)
+
+After the bandit pass, read each file in `<files>` and reason about security issues that static analysis cannot detect. This uses the same model executing this skill — no extra tooling required.
+
+For each file `f` in `<files>`, `Read` its full content (you will also use this read to compose bandit proposals in the next step — do both in one pass). Analyze for the 6 categories below. **Include a finding only if your confidence is HIGH (≥ 80%).** For each finding, compose a concrete proposed fix inline (same quality standard as bandit proposals).
+
+| Category | `test_id` tag | What to look for |
+|---|---|---|
+| Auth/authorization | `LLM-AUTH` | Missing access checks before sensitive ops, IDOR (user A can reach user B's resource), privilege escalation via indirect call path |
+| Injection paths | `LLM-INJECTION` | Untrusted input (request params, user strings, env vars, file content from disk) flowing into shell / SQL / `eval` / `exec` / template rendering / file path without sanitization — trace source-to-sink |
+| Business logic | `LLM-LOGIC` | TOCTOU (`os.path.exists` then `open`), race on shared state, missing negative/zero/type validation in values that feed security decisions |
+| Hardcoded secrets | `LLM-SECRET` | API keys, JWT secrets, bearer tokens, DB URLs with embedded passwords in string literals that bandit did not flag |
+| Cryptography | `LLM-CRYPTO` | Hardcoded IVs or nonces, ECB mode, `random.seed(constant)` feeding a security-sensitive context |
+| Second-order effects | `LLM-SECOND-ORDER` | Data written to persistent storage (DB, cache, file) that will later be deserialized, rendered, or executed without sanitization |
+
+**Deduplication**: skip any LLM finding where a bandit finding in `bandit_findings[]` already targets the same `(filename, line_number)`.
+
+Collect confirmed LLM findings as `llm_findings[]` (each carries its proposed fix). Then merge:
+
+```
+all_findings[] = bandit_findings[] + llm_findings[]
+```
+
+### If all_findings is empty
 
 Continue to **auxiliary scans** below — nothing to fix.
 
-### If findings exist — compose fix proposals
+### If all_findings is non-empty — compose and display proposals
 
-For **every** finding, `Read` the source line and compose a concrete proposed fix grounded in the actual code. Use the templates below as a starting point — adapt to the real symbol names.
+For **every bandit finding** in `all_findings[]`, `Read` the source line (you read the file above — reuse that content) and compose a concrete proposed fix grounded in the actual code. Use the templates below as a starting point — adapt to the real symbol names. LLM findings already carry their proposed fixes from Pass 2 — do not re-derive them.
 
 | `test_id` | Proposed fix template |
 |---|---|
@@ -91,10 +116,10 @@ For **every** finding, `Read` the source line and compose a concrete proposed fi
 
 ### Display findings with proposals
 
-Print the consolidated block:
+Print the consolidated block covering all findings in `all_findings[]`:
 
 ```
-Found <N> security finding(s) across all severity levels:
+Found <N> security finding(s) (<B> from bandit, <L> from LLM analysis):
 
   1. [<severity>/<confidence>] <filename>:<line_number> <test_id> — <issue_text>
      → Proposed fix: <fix proposal grounded in the actual code at this line>
@@ -105,14 +130,14 @@ Found <N> security finding(s) across all severity levels:
   ...
 ```
 
-Group findings by file for readability. Within each file, sort by line number.
+Bandit findings show B-codes (`B324`, `B608`, …). LLM findings show descriptive tags (`LLM-INJECTION`, `LLM-AUTH`, …). Group findings by file for readability. Within each file, sort by line number.
 
 ### Ask consent once
 
 Call `AskUserQuestion` once with:
 
 - **header**: `Security fixes`
-- **question**: `Do you want me to fix all <N> issue(s)?`
+- **question**: `Do you want me to fix all <N> issue(s)? (<B> from bandit, <L> from LLM analysis)`
 - **multiSelect**: `false`
 - **options**:
   - label `Yes`, description `Apply all proposed fixes above`
@@ -128,7 +153,7 @@ Stop with success (not an error — the user made a choice). Skip auxiliary scan
 
 ### On `Yes` — fan-out to `security-fixer` (parallel, per file)
 
-Group all findings by `filename`. Each group becomes one subagent invocation.
+Group all findings in `all_findings[]` by `filename`. Each group becomes one subagent invocation.
 
 **Issue ALL `Task` calls in a single message.** For G groups ≤ 10, that's G `Task` tool calls in the same response. For G > 10, split into batches of 10 across consecutive messages (Claude Code's parallel limit is 10 per message).
 
@@ -138,13 +163,13 @@ Each `Task` call invokes subagent `security-fixer` with this JSON payload:
 {
   "file": "<source path>",
   "findings": [
-    {"test_id": "<B-code>", "line": <int>, "issue": "<bandit issue_text>", "severity": "<LOW|MEDIUM|HIGH>", "confidence": "<LOW|MEDIUM|HIGH>", "proposed": "<the proposed fix you composed for this finding>"},
+    {"test_id": "<B-code or LLM-tag>", "line": <int>, "issue": "<issue text>", "severity": "<LOW|MEDIUM|HIGH>", "confidence": "<LOW|MEDIUM|HIGH>", "proposed": "<the proposed fix you composed for this finding>"},
     ...
   ]
 }
 ```
 
-`proposed` is the same fix text already shown to the user — pass it verbatim so the subagent applies what was approved.
+`proposed` is the same fix text already shown to the user — pass it verbatim so the subagent applies what was approved. Bandit findings carry B-codes (`B324`, …); LLM findings carry descriptive tags (`LLM-INJECTION`, …). The subagent treats both identically.
 
 Each subagent returns ONE line of JSON:
 
@@ -208,7 +233,9 @@ Omit a segment whose tool is `n/a`. Stop with success.
 
 ### Hard rules
 
-- **List everything, propose everything.** Every bandit finding at every severity gets a concrete fix proposal — no "advisory only" bucket with no fix.
+- **Two passes, one consent.** Pass 1 = bandit (all severity levels). Pass 2 = LLM analysis (6 categories, HIGH confidence only, deduplicated vs bandit). Merged into `all_findings[]` before the single consent prompt.
+- **LLM pass is HIGH-confidence only.** Do not include LLM findings below HIGH confidence — this keeps the signal-to-noise ratio acceptable. If unsure, omit.
+- **List everything, propose everything.** Every finding in `all_findings[]` — bandit and LLM alike — gets a concrete fix proposal. No "advisory only" bucket with no fix.
 - **Consent once, then fan-out.** One `AskUserQuestion` for the whole batch. On `Yes`, fan-out one `security-fixer` per file. On `No`, report and stop.
 - **Fix proposal must be concrete.** Read the actual line; tailor the proposal to the real symbol names. For unknown codes, read surrounding context and compose a real fix — generic "manual review" is a last resort.
 - **Parent does not edit.** Edits happen inside `security-fixer` subagents only. The parent reads files (to compose proposals) and invokes `Task`.
