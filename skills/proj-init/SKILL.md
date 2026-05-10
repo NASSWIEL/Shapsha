@@ -9,9 +9,6 @@ allowed-tools: Bash, Read, Glob
 
 Plugin templates root: `${CLAUDE_PLUGIN_ROOT}/templates`
 Project root: !`pwd`
-uv version: !`uv --version 2>&1 | head -1 || echo "uv: NOT INSTALLED"`
-Poetry version: !`poetry --version 2>&1 | head -1 || echo "poetry: NOT INSTALLED"`
-Detected lockfiles: !`ls -1 uv.lock poetry.lock 2>/dev/null | tr '\n' ' '`
 Existing runner setting: !`python -c "
 try:
     import tomllib
@@ -23,6 +20,8 @@ try:
 except Exception:
     print('<unset>')
 " 2>/dev/null || echo "<unset>"`
+venv directory: !`test -d .venv && echo "EXISTS" || echo "ABSENT"`
+requirements.txt: !`test -f requirements.txt && echo "EXISTS" || echo "ABSENT"`
 Project shape: !`python -c "
 import os
 try:
@@ -37,12 +36,16 @@ has_poetry = bool(data.get('tool', {}).get('poetry'))
 has_dep_groups = bool(data.get('dependency-groups'))
 poetry_score = (1 if has_poetry else 0) + (1 if os.path.exists('poetry.lock') else 0)
 uv_score = (1 if has_dep_groups else 0) + (1 if os.path.exists('uv.lock') else 0)
-if poetry_score > 0 and uv_score == 0:
+has_venv = os.path.isdir('.venv')
+has_req = os.path.isfile('requirements.txt')
+if poetry_score > 0 and uv_score == 0 and not has_venv:
     print('poetry')
-elif uv_score > 0 and poetry_score == 0:
+elif (uv_score > 0 or has_venv) and poetry_score == 0:
     print('uv')
 elif poetry_score > 0 and uv_score > 0:
     print('mixed')
+elif has_req:
+    print('requirements')
 else:
     print('bare')
 " 2>/dev/null || echo "bare"`
@@ -91,40 +94,39 @@ If you find yourself about to write a narrative sentence between tool calls, sto
 
 ## Logic
 
-### Pre-flight
+### STEP 0 — Choose runner (MANDATORY FIRST ACTION)
 
-1. If neither `uv` nor `poetry` is installed → output:
+**Determine the runner using the decision table below — in order, first match wins. Do not run any other Bash, Write, or Read before this step is complete.**
 
-   ```
-   proj-init aborted: besoin de uv (pour venv) ou poetry. Install uv: https://docs.astral.sh/uv/getting-started/installation/  Install poetry: https://python-poetry.org/docs/#installation
-   ```
+| Priority | Condition | Action |
+|---|---|---|
+| 1 | `Existing runner setting` is `uv`, `venv`, or `poetry` | Use it silently — user already chose. Skip to Step 1. |
+| 2 | `venv directory` == `EXISTS` AND `Project shape` != `poetry` | Runner = `venv`. No question. |
+| 3 | `Project shape` == `poetry` AND `venv directory` == `ABSENT` | Runner = `poetry`. No question. |
+| 4 | `Project shape` == `mixed` | Runner is ambiguous — ask (question hint: `mixed`). |
+| 5 | `requirements.txt` == `EXISTS` AND `Project shape` == `bare` | Migrating from requirements — ask (question hint: `requirements`). |
+| 6 | `Project shape` == `bare` (nothing detected) | Fresh project — ask (question hint: `bare`). |
 
-   stop with non-zero status.
+**When "ask" is required** (rows 4–6), call `AskUserQuestion` RIGHT NOW:
 
-### A.0 Choose runner — always ask
+- **header**: `Environnement`
+- **question**: `venv ou poetry pour ce projet ?` + one-line hint:
+  - `bare` → `Aucune préférence détectée — projet vierge.`
+  - `requirements` → `Un fichier requirements.txt est présent. Quel runner veux-tu utiliser ?`
+  - `mixed` → `Le projet contient à la fois des métadonnées poetry et uv ; choisis celui que tu veux utiliser désormais.`
+- **multiSelect**: `false`
+- **options**:
+  - label `venv` — description `Environnement virtuel standard (via uv). Lockfile uv.lock, dev deps sous [dependency-groups]`
+  - label `poetry` — description `Lockfile poetry.lock, dev deps sous [tool.poetry.group.dev.dependencies]`
 
-Determine the runner:
+After the runner is determined (auto-detected or user-chosen), verify the tool is on PATH:
 
-1. `Existing runner setting` is `uv`, `venv`, or `poetry` → reuse silently (the user already chose on a previous run; respect that). Skip to step A.
+- `venv` → run `uv --version 2>&1`. If it fails → output `proj-init aborted: uv requis pour le mode venv. Install: https://docs.astral.sh/uv/getting-started/installation/` stop.
+- `poetry` → run `poetry --version 2>&1`. If it fails → output `proj-init aborted: poetry requis. Install: https://python-poetry.org/docs/#installation` stop.
 
-2. **Otherwise — always ask.** Use `AskUserQuestion` (one prompt, two options). The user MUST choose — never decide silently, even if only one tool is installed:
+### Step 1 — Persist runner choice
 
-   - **header**: `Environnement`
-   - **question**: `venv ou poetry pour ce projet ?` followed by a one-line context hint based on `Project shape`:
-     - `bare` → `Aucune préférence détectée dans pyproject.toml.`
-     - `uv` → `Le projet utilise déjà un venv (uv.lock ou [dependency-groups] détecté).`
-     - `poetry` → `Le projet utilise déjà poetry ([tool.poetry] ou poetry.lock détecté).`
-     - `mixed` → `Note : le projet contient à la fois des métadonnées poetry et uv ; choisis celui que tu veux utiliser désormais.`
-   - **multiSelect**: `false`
-   - **options**:
-     - label `venv` — description `Environnement virtuel standard (via uv). Lockfile uv.lock, dev deps sous [dependency-groups]`
-     - label `poetry` — description `Lockfile poetry.lock, dev deps sous [tool.poetry.group.dev.dependencies]`
-
-3. **After the choice — verify the tool is installed.**
-   - `venv` requires `uv` on PATH. If not installed → output `proj-init aborted: uv requis pour le mode venv. Install: https://docs.astral.sh/uv/getting-started/installation/` stop.
-   - `poetry` requires `poetry` on PATH. If not installed → output `proj-init aborted: poetry requis. Install: https://python-poetry.org/docs/#installation` stop.
-
-After the choice is known, persist it to `pyproject.toml` so all other skills (`check-style`, `security`, etc.) dispatch consistently. If `pyproject.toml` does not yet exist, create the minimal version described in step B.1 first, then add:
+After the runner is known, persist it to `pyproject.toml` so all other skills (`check-style`, `security`, etc.) dispatch consistently. If `pyproject.toml` does not yet exist, create the minimal version described in Step 3.1 first, then add:
 
 ```toml
 [tool.bt-ai]
@@ -151,7 +153,7 @@ open('pyproject.toml','w').write(text)
 "
 ```
 
-### A. Install dev tools — never dual-spec
+### Step 2 — Install dev tools — never dual-spec
 
 A tool is **already declared** when it appears in **ANY** of these sections:
 
@@ -217,7 +219,7 @@ Note: `gitlint-core` is the dependency-light variant of gitlint (without the `sh
 
 If the install command exits non-zero → output `proj-init aborted: install failed.` followed by the captured stderr verbatim. Stop with non-zero status.
 
-### B. Drop config files (hybrid: skip-if-identical, ask-if-conflict, create-if-missing)
+### Step 3 — Drop config files (hybrid: skip-if-identical, ask-if-conflict, create-if-missing)
 
 For `.gitlint`:
 
@@ -263,7 +265,7 @@ For `pyproject.toml`:
 
 4. **Malformed TOML**: `!python -c "import tomllib; tomllib.load(open('pyproject.toml','rb'))" 2>&1 || echo MALFORMED`. On `MALFORMED` → output `proj-init aborted: pyproject.toml is malformed. Fix manually before re-running.` exit non-zero.
 
-### C.5 Migrate root-level docs into `docs/`
+### Step 3.5 — Migrate root-level docs into `docs/`
 
 Detect root-level Markdown docs that match the canonical doc set, and offer to move them. README is **never** moved.
 
@@ -322,7 +324,7 @@ If non-empty:
 
 If empty: skip silently; `Migrations` list is `none`.
 
-### C. Drop documentation templates (only if target absent)
+### Step 4 — Drop documentation templates (only if target absent)
 
 `cp -n` (no-clobber). Never read+write — keeps context clean.
 
@@ -337,7 +339,7 @@ If empty: skip silently; `Migrations` list is `none`.
 !cp -n "${CLAUDE_PLUGIN_ROOT}/templates/README.md" README.md 2>/dev/null || true
 ```
 
-### D. Verify installations
+### Step 5 — Verify installations
 
 Use the chosen runner.
 
@@ -372,7 +374,7 @@ Replace `<list ...>` with the actual per-file outcome. No emojis. No headers in 
 
 ## Edge cases
 
-- `pyproject.toml` exists but malformed → abort per step B.4.
+- `pyproject.toml` exists but malformed → abort per Step 3.4.
 - Existing `[tool.ruff]` section → `AskUserQuestion` `[k]eep / [m]erge / [r]eplace`. Default: `[m]erge`.
 - `.git` absent → continue, but include in output: `Note: .git/ absent — gitlint config dropped but inactive.`.
 - Network failure on `uv add` → exit non-zero with stderr.

@@ -123,20 +123,39 @@ Read pytest's output. Build counters `passed`, `failed`, `errors` from the final
 
 Output `Generated tests for N files in parallel: <comma-list>. All tests pass.` Stop with success.
 
-#### If tests fail — improve source code
+#### If tests fail — triage, then fix
 
-Tests are the truth. If a test fails, the **original source code** has a deficiency — the test is correct. Do NOT modify test code.
+**Step 1 — triage each failure.** For each failing test, `Read` the test file and the pytest traceback. Classify the failure into exactly one of two categories:
 
-**Step 1 — analyze each failure.** For each failing test:
+| Category | Description | Examples |
+|---|---|---|
+| **Mechanical** | The test cannot execute due to a setup error produced by the test-writer, not a source deficiency | Wrong `mock.patch` target path (`rag_engine.fn` when fn lives in `text_processor`), missing import in test file, wrong fixture name, wrong exception class imported |
+| **Semantic** | The test runs but the source code does not satisfy the assertion | `AssertionError`, unexpected return value, function raises when it shouldn't (or vice versa), wrong side-effect |
 
-1. `Read` the test file to understand what the test expects (the assertion, the expected return value, the expected exception).
-2. `Read` the source file being tested to understand what the code actually does.
-3. Determine what change to the source code would make the test pass.
+**Step 2 — fix mechanical failures automatically (no consent needed).**
 
-**Step 2 — propose source code improvements.** Display all proposed improvements:
+Mechanical failures are test-writer bugs — the test logic is correct but the plumbing is wrong. Fix them directly in the test file:
+
+- **Wrong `mock.patch` path**: the patch target must be the module where the name is looked up at call time. If `rag_engine.py` calls `setup_advanced_text_processing()` which it imported from `text_processor`, the correct patch is `rag_engine.setup_advanced_text_processing` (patch where it is used, not where it is defined). `Read` the source file to confirm the actual import, then correct the patch string.
+- **Missing import in test file**: add the missing `import` / `from ... import` line.
+- **Wrong fixture name or conftest path**: correct to match what pytest expects.
+
+Apply mechanical fixes via `Edit`/`MultiEdit` on the test files only. Re-run pytest after fixing all mechanical failures:
 
 ```
-<N> test(s) failed — proposing improvements to source code:
+<runner> run pytest -q --no-header --tb=short <test paths> 2>&1
+```
+
+If all tests now pass → stage both test files and any modified source files → output summary → stop with success.
+
+**Step 3 — propose source code improvements for remaining semantic failures.**
+
+Tests are the truth. If a semantic failure remains, the **original source code** has a deficiency — the test expectation is correct. Do NOT change test assertions or test logic.
+
+`Read` each failing test file and the corresponding source file. Determine what change to the source code would make the test pass. Display all proposed improvements:
+
+```
+<N> semantic test failure(s) — proposing improvements to source code:
 
   1. <test_file>::<test_name> — <failure description>
      Source: <source_file>:<line>
@@ -145,7 +164,7 @@ Tests are the truth. If a test fails, the **original source code** has a deficie
   2. ...
 ```
 
-**Step 3 — ask consent once.** Call `AskUserQuestion` with:
+**Step 4 — ask consent once.** Call `AskUserQuestion` with:
 
 - **header**: `Source code improvements`
 - **question**: `Do you want me to improve the source code so all tests pass?`
@@ -154,17 +173,17 @@ Tests are the truth. If a test fails, the **original source code** has a deficie
   - label `Yes`, description `Apply all proposed improvements above`
   - label `No`, description `Skip — tests remain failing`
 
-**Step 4 — on `Yes`, apply improvements.**
+**Step 5 — on `Yes`, apply improvements.**
 
-Apply the proposed changes to the **source files** (not the test files) via `Edit`/`MultiEdit`. Then re-run pytest:
+Apply the proposed changes to the **source files** via `Edit`/`MultiEdit`. Then re-run pytest:
 
 ```
 <runner> run pytest -q --no-header --tb=short <test paths> 2>&1
 ```
 
-If all tests pass → stage both test files and modified source files → output summary → stop with success.
+If all tests pass → stage test files and modified source files → output summary → stop with success.
 
-If tests still fail → repeat Steps 1-4 (cap at 2 iterations total). If still failing after 2 iterations:
+If tests still fail → repeat Steps 3–5 (cap at 2 iterations total). If still failing after 2 iterations:
 
 ```
 Halted: <n> test(s) still failing after source code improvements. Review the failures above.
@@ -172,7 +191,7 @@ Halted: <n> test(s) still failing after source code improvements. Review the fai
 
 Stop with non-zero exit.
 
-**Step 4 — on `No`.**
+**Step 5 — on `No`.**
 
 ```
 Tests generated but <N> failing. Source code improvements declined.
@@ -183,7 +202,8 @@ Stop with success (the tests are written and staged, even if some fail).
 ### Hard rules
 
 - **Fan-out parallèle**: les N appels `Task` partent dans **un seul message** du parent. Sériels = pénalité de 5-10× sur le wall-clock.
-- **Tests are the truth.** Never modify test code after generation. If a test fails, the source code is improved — not the test.
+- **Two failure categories, two responses.** Mechanical failures (wrong mock path, missing import) are fixed in the test file automatically — they are test-writer bugs, not source deficiencies. Semantic failures (bad assertions, wrong return value) are fixed in the source code, with user consent.
+- **Never weaken a test.** Never change test assertions, expected values, or expected exceptions. Never remove or skip a test case. Mechanical fixes touch only plumbing (patch target string, import statement, fixture name) — never the assertion logic.
 - **Consent before modifying source.** Always `AskUserQuestion` before changing the user's original code. The user must see what will change and approve.
 - **Hermetic.** Never write `gen_tests_*.py`, `targets.json`, parser scripts, or any scratch helper into the user's tree.
 - **Single message per phase.** Discover (1 message of Reads/Globs), fan-out (1 message of N Tasks), stage (1 message of git adds), verify (1 message), then improvement loop (1 message per iteration).
