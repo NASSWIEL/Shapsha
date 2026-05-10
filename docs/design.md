@@ -4,7 +4,7 @@
 **Marketplace**: `CGI-BT-AI` (single-plugin marketplace, layout: plugin at repo root)
 **Author**: shapsha-lemans <shapsha-lemans@cgi.com>
 **License**: Proprietary
-**Version**: 0.1.10
+**Version**: 2.0.0
 **Distribution**: git clone + `/plugin install` from `https://github.com/NASSWIEL/bt-ai-plugin`
 
 This document records what is implemented, the workflow it produces, the methodology behind the choices, the use-cases each component serves, and the rationale for every tool the plugin depends on. It is a runtime reference: a contributor or auditor should be able to read this single file and understand the surface, the contracts, and the trade-offs.
@@ -14,6 +14,8 @@ This document records what is implemented, the workflow it produces, the methodo
 ## 1. Purpose
 
 `bt-ai` standardises Python engineering practice for the BT-AI team at CGI. It bundles seven model-invokable skills, two deterministic slash commands, six focused subagents (five active, one retained but unused), and a set of project templates so that new repositories start on the same footing and changes are validated with the same gates before reaching `main`.
+
+The plugin's key design principle across all v2.0 changes is **zero silent drops**: every finding — whether from a linter, a security scanner, or an LLM-native analysis pass — either gets fixed automatically, fixed with user consent, or refused with a structured reason. Nothing is labelled "advisory" and left without a proposed fix.
 
 The plugin's design intent is threefold:
 
@@ -93,9 +95,9 @@ Two manifests describe the marketplace and the plugin separately. `marketplace.j
 | Bandit threshold | All levels — no severity or confidence filter (no `-ll -ii`) |
 | Bandit fix approach | Every finding gets a concrete fix proposal; consent once; fan-out fixes all (see §4.6) |
 | Test location | `tests/foo/test_bar.py` mirroring `src/foo/bar.py` |
-| Silent execution | mandatory — no narration |
+| Silent execution | mandatory for individual skills — no narration between tool calls. `preflight` is the exception: it emits large separators (`===…===`) between steps and a one-sentence narration before every Bash command so the user can track multi-skill progress in real time. |
 | Skill auto-invocation | disabled — `disable-model-invocation: true` everywhere |
-| Consent before edits | mandatory for `security` (before fixing findings) and `gen-tests` (before modifying source code) via `AskUserQuestion`; `check-style`/`doc-sync`/`readme-sync` auto-apply |
+| Consent before edits | `security`: consent once before fan-out (bandit + LLM findings merged). `gen-tests`: consent before modifying source code to satisfy failing tests. `check-style` Step 5: consent before the parent applies fixes that `style-fixer` refused (refused ≠ advisory — proposed fixes are always shown). `doc-sync`/`readme-sync` auto-apply without consent. |
 | Per-file fan-out | `check-style`, `security`, `gen-tests`, `doc-sync` each issue all `Task` calls in a single message (≤10 per batch) |
 
 ---
@@ -148,21 +150,37 @@ The pattern is verified across all five skills.
 
 **Pass 2 — re-scan, fix ALL remaining with the model.** No classification into buckets — every remaining finding goes to the model. `D1xx` (docstrings), `N8xx` (renames), `F821` (undefined name), `E999` (syntax error), `S*` (security), `C90*` (complexity — refactored by extracting helpers), `PL*` (pylint — refactored or fixed), and any other code. Per-file work fans out to `style-fixer` subagents; cross-file renames (N801/N802) handled by parent via Grep + MultiEdit. If the model genuinely cannot fix something, it refuses with a structured reason — but it tries first.
 
-Display rule: every remaining finding renders as a 3-line code snippet so the user sees what the model is about to change. No `AskUserQuestion` — fixes are applied automatically after display.
+**Display rule**: every remaining finding is preceded by a `----------------------------------` separator and rendered as a 3-line code snippet with an `→ action` line. All findings go to `style-fixer` — there is no pre-fan-out advisory split.
 
-### 4.6 All-level scanning, consent once, fix everything possible
+**Step 5 — refused findings with consent**: after the fan-out completes, any items in `agent_refused[]` are shown in a `===…===` block with a concrete proposed fix per item. The parent calls `AskUserQuestion` once (`Apply fixes for these N issue(s)?`). On `Yes`, the parent applies the fixes directly via `Edit`/`MultiEdit` and stages the touched files. On `No`, refused items appear in the final summary as remaining. The final summary reports: `auto-fixed / consent-fixed / remaining`.
 
-Bandit scans **all severity and confidence levels** — no `-ll -ii` filter. Every finding gets a concrete fix proposal grounded in the actual source code. The parent shows the full list with proposals and asks consent **once** for the whole batch via `AskUserQuestion`.
+### 4.6 Two-pass security: bandit + LLM-native analysis, consent once
 
-On `Yes`, the parent groups findings by filename and **fans out one `security-fixer` subagent per file in parallel**. The agent tries to fix everything — including codes that were previously refused (B102, B301/B302/B306, B608). The agent only refuses when it genuinely cannot determine a safe replacement from the code context:
+**Pass 1 — bandit**: scans **all severity and confidence levels** — no `-ll -ii` filter. Results → `bandit_findings[]`. B101 assertions in test files are filtered out (pytest uses `assert` by design).
 
-- `B102` (`exec`) with dynamic user input → `exec-with-dynamic-input` (static strings are inlined);
-- `B301`/`B302`/`B306` (pickle) with complex custom objects → `pickle-for-complex-objects` (simple data is converted to JSON);
-- `B608` (SQL injection) with unidentifiable DB driver → `unknown-db-driver` (known drivers get parameterized queries);
-- Shell commands with pipes/redirects/`&&` → `complex-shell-syntax`;
-- Anything the agent cannot match to the proposed line → `ambiguous-fix`.
+**Pass 2 — LLM-native analysis**: after the bandit pass, the parent reads each file and reasons about six categories of issues that static analysis cannot detect. Only HIGH-confidence (≥80%) findings are included:
 
-The refused items are surfaced in the post-fix summary — never silently dropped, never fabricated into a fix. On `No`, the findings are reported but nothing is modified.
+| Tag | Category |
+|---|---|
+| `LLM-AUTH` | Missing access checks, IDOR, privilege escalation |
+| `LLM-INJECTION` | Untrusted input → shell / SQL / eval / template / file path (source-to-sink tracing) |
+| `LLM-LOGIC` | TOCTOU, race conditions, missing negative/zero validation |
+| `LLM-SECRET` | Hardcoded API keys, JWT secrets, bearer tokens that bandit missed |
+| `LLM-CRYPTO` | Hardcoded IVs/nonces, ECB mode, `random.seed(constant)` for security context |
+| `LLM-SECOND-ORDER` | Data written to persistent storage that will later be deserialized/rendered without sanitization |
+
+LLM findings are deduplicated against bandit results by `(filename, line)`. They are merged into `all_findings[] = bandit_findings[] + llm_findings[]`.
+
+**Single consent**: the parent shows all findings (`B` from bandit, `L` from LLM) with `[severity/confidence] … → Proposed fix:` and calls `AskUserQuestion` **once** for the whole batch.
+
+On `Yes`, the parent fans out one `security-fixer` subagent per file. The agent handles both B-codes and `LLM-*` tags identically (follows the `proposed` field). Refuses only when genuinely ambiguous:
+- `B102` with dynamic user input → `exec-with-dynamic-input`;
+- `B301`/`B302`/`B306` with complex objects → `pickle-for-complex-objects`;
+- `B608` with unidentifiable DB driver → `unknown-db-driver`;
+- Shell with pipes/redirects/`&&` → `complex-shell-syntax`;
+- Anything the agent cannot safely resolve → `ambiguous-fix`.
+
+Refused items surface in the final summary. On `No`, nothing is modified.
 
 ### 4.7 Subagent context isolation and parallel fan-out
 
@@ -197,8 +215,10 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 `/bt-ai:preflight` step 7 composes a Conventional Commit message from the staged diff and validates it through `gitlint --staged --msg-stdin`. On success, the message is written to `.git/COMMIT_EDITMSG`. Step 8 then invokes `/bt-ai:commit-push-pr`, which detects the file and uses `git commit -F .git/COMMIT_EDITMSG`, then `rm -f`s it. This handoff path was chosen over arguments because:
 
 - it is robust to the user inspecting the message between preflight and the commit,
-- it is recoverable: if step 8 fails, the file remains and the user sees the validated message,
+- it is recoverable: if step 8 fails, the file is cleaned up by preflight before the halt message so a retry always composes a fresh message,
 - it adds zero new flags to the commit-push-pr surface.
+
+Step 7 also removes any stale `.git/COMMIT_EDITMSG` at its start (before composing the new message) so a previous failed run can never leak its message into the current run.
 
 ---
 
@@ -240,38 +260,38 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 **Two-pass architecture** (see §4.5): Pass 1 runs `<runner> run ruff check --fix --unsafe-fixes` followed by `<runner> run ruff format` — ruff fixes everything it can (cheap, no LLM tokens). Pass 2 re-scans with `--output-format=json --no-fix` and sends ALL remaining findings to the model — no advisory bucket. `--force-exclude` is always passed so `[tool.ruff].extend-exclude` applies to explicit file lists.
 
-**Display**: every remaining finding (in any bucket) is printed with a 3-line code snippet. Each `model_fixable` block also previews the action (`→ Insert a Google-style function docstring under def <name>(...):`, `→ Add missing import for <name>`, etc.).
+**Display**: every remaining finding is preceded by a `----------------------------------` separator and rendered as a 3-line code snippet + `→ action` line. No pre-fan-out split into advisory/non-advisory categories — all findings are displayed uniformly. Refused findings are shown only after the fan-out, in Step 5.
 
 **Decision point** (never halts):
 - No remaining findings → `Style: no findings (ruff fixed everything).` exit 0.
-- No remaining findings → `Style: no findings (ruff fixed everything).` exit 0.
-- Findings remain → display all with snippets and action lines, then **immediately run the fix sequence** (no consent prompt).
+- Findings remain → display all with separators, snippets, and action lines, then **immediately run the fix sequence** (no consent before Step 5).
 
 **Fix sequence**:
 1. All findings per-file → fan-out: one `style-fixer` subagent per impacted file, **all `Task` calls in a single message** (≤10 per batch). Each agent fixes D1xx docstrings, N803/N806 renames, F821 imports, E999 syntax, S* security, C90*/PL* complexity/refactoring, and any other code. Aggregates `docstrings_total`, `renames_local_total`, `code_fixes_total`, `security_fixes_total`, `refactors_total`, `agent_refused[]`, `agent_errors[]`.
-2. `model_fixable` cross-file (N801 class / N802 function renames) → handled by the **parent** via `Grep` (find every reference) + per-file `MultiEdit`. Subagents refuse these by design.
+2. Cross-file renames (N801 class / N802 function) → handled by the **parent** via `Grep` + per-file `MultiEdit`. Subagents refuse these by design.
 3. Re-run ruff to verify.
 4. Stage only the files that were actually modified.
+5. **Refused findings with consent**: if `agent_refused[]` is non-empty, display a `===…===` block with a concrete proposed fix per item. `AskUserQuestion` once. On `Yes`, parent applies fixes directly via `Edit`/`MultiEdit` and stages. On `No`, refused items are reported as remaining.
 
-**Output**: `Style: <fixed_count> fixed, <remaining> could not be auto-fixed.` (with refused reasons listed if any).
+**Output**: `Style: <auto_fixed> auto-fixed, <consent_fixed> consent-fixed, <still_remaining> remaining.` (refused reasons listed if any).
 
 #### `/bt-ai:security`
 
-**Use case**: scan changed Python files for security issues at all severity levels, propose fixes for everything, fix on approval.
+**Use case**: scan changed Python files for security issues using bandit (SAST) + an LLM-native second pass (deep reasoning). Propose fixes for everything, fix on approval.
 
-**Engine**: `<runner> run bandit -f json <files>` — no severity or confidence filter. Every finding at every level is captured.
-
-**Fix proposals**: for every finding, the parent reads the source line and composes a concrete proposed fix grounded in the actual code (per-test_id template table in the skill body, expanded to ~30 codes). Unknown codes get an LLM-composed fix based on surrounding context — generic "manual review" is a last resort.
+**Two-pass engine** (see §4.6):
+- Pass 1: `<runner> run bandit -f json <files>` — no severity or confidence filter → `bandit_findings[]`. B101 in test files filtered.
+- Pass 2: parent reads each file and reasons about 6 categories (LLM-AUTH, LLM-INJECTION, LLM-LOGIC, LLM-SECRET, LLM-CRYPTO, LLM-SECOND-ORDER) — HIGH confidence only → `llm_findings[]`. Merged: `all_findings[]`.
 
 **Decision point**:
-- No findings → continue to auxiliary scans.
-- Findings exist → display all with `[severity/confidence]` prefix, grouped by file, each with `→ Proposed fix:`. Then `AskUserQuestion` once: `Yes` (apply all) / `No` (skip fixing).
+- `all_findings[]` empty → continue to auxiliary scans.
+- Findings exist → display all `(<B> from bandit, <L> from LLM)` with `[severity/confidence]` prefix + `→ Proposed fix:`. `AskUserQuestion` once.
 - `No` → findings reported, nothing modified, stop with success.
-- `Yes` → fan-out one `security-fixer` per file (**all `Task` calls in a single message**). Agent tries to fix everything; refuses only when genuinely ambiguous. Re-run bandit to verify.
+- `Yes` → fan-out one `security-fixer` per file (**all `Task` calls in a single message**). Agent handles both B-codes and LLM-* tags. Re-run bandit to verify.
 
-**Auxiliary scans** (run only when the tool is installed): `pip-audit --strict` for dependency CVEs; `detect-secrets scan --baseline /dev/null` for hardcoded credentials in changed files. Either may report `n/a` if absent.
+**Auxiliary scans** (run only when installed): `pip-audit --strict` for CVEs; `detect-secrets scan --baseline /dev/null` for hardcoded credentials. Either may report `n/a` if absent.
 
-**Output**: `Security: <applied> fixed, <refused> could not be auto-fixed, <remaining> remaining, <deps_vulns> dependency vuln(s), <secrets_found> potential secret(s).` Each segment whose tool is `n/a` is omitted.
+**Output**: `Security: <applied> fixed, <refused> could not be auto-fixed, <remaining> remaining, <deps_vulns> dependency vuln(s), <secrets_found> potential secret(s).` Segments whose tool is `n/a` are omitted.
 
 #### `/bt-ai:gen-tests`
 
@@ -288,7 +308,12 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 **Fan-out**: per-source-file work — one `test-writer` subagent per source file with missing tests, **all `Task` calls in a single message** (≤10 per batch). Each agent writes its own test file with golden + error + boundary cases.
 
-**Verification and source code improvement**: after the agents write tests, the parent runs pytest. Tests are the truth — if a test fails, the source code is improved (not the test). The parent reads the failing test and source, proposes concrete improvements, asks consent once (`AskUserQuestion`), applies the changes, and re-runs (cap 2 iterations). Halt only if failures persist after improvements.
+**Operating mode**: silent — no narration between tool calls. `git add` and `pytest` are always separate Bash calls (never chained — pytest's exit code 1 would mask a successful stage). `test-fixer` is never invoked.
+
+**Verification and triage**: after agents write tests, the parent stages them (`git add`) then runs `pytest -q` in a separate call. Failures are triaged into two categories:
+
+- **Mechanical** (test plumbing bugs — test-writer errors, not source deficiencies): wrong `mock.patch` target path, missing import, wrong fixture, `sys.modules` cross-contamination across test files. Fixed directly in the test file by the parent — no consent needed.
+- **Semantic** (real assertion mismatches — source code deficiency): the parent reads the failing test and source, proposes concrete improvements, asks consent once (`AskUserQuestion`), applies to source files via `Edit`/`MultiEdit`, and re-runs (cap 2 iterations). Halt only if failures persist after 2 iterations.
 
 #### `/bt-ai:doc-sync`
 
@@ -344,10 +369,18 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 7. **Commit message gate**: compose Conventional Commit from staged diff; validate via `gitlint --staged --msg-stdin`; on validation success, write to `.git/COMMIT_EDITMSG`; on failure, prompt for rewrite (one retry).
 8. `commit-push-pr` — consumes `.git/COMMIT_EDITMSG` if present.
 
-**Guard before step 1**:
-- not a git repo → halt;
-- nothing staged AND nothing unstaged → halt;
-- something unstaged but nothing staged → halt with `Stage them first (git add).` (preflight does not silently `git add` user changes; staging remains a user action).
+**Structured output**: preflight is the only skill that emits visual structure. Before each step a large separator block is printed (`===…=== Step N — name ===…===`). Before every Bash command within a step, a one-sentence narration explains what the command does. Small separators (`---…---`) separate sub-actions within a step. On success the final output is a closing separator followed by the PR URL.
+
+**Guards (in order — all pure checks before any side effects)**:
+1. not a git repo → halt;
+2. nothing staged AND nothing unstaged → halt;
+3. `gh` CLI absent → halt;
+4. `gh` not authenticated → halt;
+5. only unstaged changes (nothing staged) → **auto-stage** with `git add -u` (tracked modified files) + `git ls-files --others --exclude-standard -- '*.py' '*.md' 'pyproject.toml'` (targeted untracked). Scratch files, compiled outputs, and `.env`-type files are left unstaged.
+
+Guard order is critical: `gh` checks (#3/#4) run before auto-stage (#5) so files are never staged when the pipeline cannot complete.
+
+**COMMIT_EDITMSG hygiene**: step 7 removes any stale `.git/COMMIT_EDITMSG` before composing the new message. If step 8 fails, preflight removes the file before the halt line so a retry always recomposes fresh.
 
 **Output**: PR URL on full success; `Halted at step <N>: <reason>.` followed by the failing tool's verbatim output otherwise.
 
@@ -355,7 +388,20 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 **Use case**: bootstrap a new (or partly initialised) project with the team's standards.
 
-**Step A — choose runner and install dev tools**: always `AskUserQuestion` for `venv` or `poetry` (even if only one tool is installed). `venv` is backed by `uv` internally. The choice is persisted as `[tool.bt-ai].runner = "venv"|"poetry"` in `pyproject.toml`. Then:
+**STEP 0 — runner detection (mandatory first action)**: the runner is determined before any shell command using this priority table (first match wins):
+
+| Priority | Condition | Action |
+|---|---|---|
+| 1 | `[tool.bt-ai].runner` already set in `pyproject.toml` | Reuse silently |
+| 2 | `.venv/` directory exists (and no poetry markers) | `venv`, no question |
+| 3 | `poetry.lock` or `[tool.poetry]` in `pyproject.toml` (no `.venv/`) | `poetry`, no question |
+| 4 | Mixed signals | Ask user |
+| 5 | Only `requirements.txt` (bare pyproject) | Ask user (migration case) |
+| 6 | Bare project | Ask user |
+
+When asking, the call to `AskUserQuestion` is the very first tool call — no Bash or Write precedes it. After the runner is known, the chosen tool is verified on PATH (abort with install URL if absent). The choice is persisted as `[tool.bt-ai].runner = "venv"|"poetry"` in `pyproject.toml`. `venv` is backed by `uv` internally.
+
+**Step 1 — install dev tools**: then:
 
 ```
 uv add --dev   ruff bandit pyright pytest pytest-cov gitlint-core   # if runner == uv
@@ -380,8 +426,8 @@ Six subagents live under `agents/`. Each runs in an isolated context, in silent 
 | Agent | Model | Used by | Tools | Output | Role |
 |-------|-------|---------|-------|--------|------|
 | `style-fixer` | sonnet | check-style | `Read, Edit, MultiEdit` | `{"file":"...","docstrings":N,"renames_local":N,"code_fixes":N,"security_fixes":N,"refactors":N,"refused":[...],"errors":[]}` | Per-file: fixes ALL ruff codes ruff left behind — docstrings (`D1xx`), renames (`N803`/`N806`), imports (`F821`), syntax (`E999`), security (`S*`), complexity refactoring (`C901`, `PLR*`), and any other code. Refuses only cross-file renames (`N801`/`N802`) and genuinely ambiguous fixes. |
-| `security-fixer` | sonnet | security | `Read, Edit, MultiEdit` | `{"file":"...","applied":N,"refused":[{"test_id":"...","line":N,"reason":"..."}],"errors":[]}` | Per-file: apply concrete bandit fixes at all severity levels. Covers ~30 test_ids (B101→raise, B102→inline static/refuse dynamic, B105/106/107→env var, B108→tempfile, B201→`debug=False`, B301/302/306→json if possible, B311→`secrets`, B324→sha256, B501–503→`verify=True`, B506→`safe_load`, B602/605/607→arg list, B608→parameterized query if driver known, etc.). Refuses only when genuinely ambiguous — tries to fix everything. |
-| `test-writer` | sonnet | gen-tests | `Read, Write, Edit, MultiEdit, Glob, Bash` | `{"file":"...","tests_added":N,"collection_ok":bool,"errors":[]}` | Per-source-file: write golden + error + boundary tests for missing public symbols (functions, methods, async functions). Never overwrites an existing test. Never emits `pytest.skip` stubs. Single `Write` or single `MultiEdit` per file. |
+| `security-fixer` | sonnet | security | `Read, Edit, MultiEdit` | `{"file":"...","applied":N,"refused":[{"test_id":"...","line":N,"reason":"..."}],"errors":[]}` | Per-file: apply concrete security fixes for both bandit B-codes (~30 codes: B101→raise, B102→inline/refuse, B105/106/107→env var, B108→tempfile, B201→`debug=False`, B301/302/306→json, B311→`secrets`, B324→sha256, B501–503→`verify=True`, B506→`safe_load`, B602/605/607→arg list, B608→parameterized query, etc.) and LLM-sourced tags (`LLM-AUTH`, `LLM-INJECTION`, `LLM-LOGIC`, `LLM-SECRET`, `LLM-CRYPTO`, `LLM-SECOND-ORDER`). Both types are handled identically: the agent follows the `proposed` field from the parent. Refuses only when genuinely ambiguous. |
+| `test-writer` | sonnet | gen-tests | `Read, Write, Edit, MultiEdit, Glob, Bash` | `file=<path> tests_added=<N> omitted=<N> collection_ok=<true\|false>` | Per-source-file: write golden + error + boundary tests for missing public symbols. Key v2.0 additions: (1) `sys.modules.setdefault` pre-mock block for heavy third-party deps before importing the module under test; (2) `sys.modules.pop("<module_under_test>", None)` immediately before the import to prevent cross-contamination from earlier test files in the same pytest session; (3) explicit `mock.patch` formula (`patch("<module_under_test>.<name_as_imported_there>")`); (4) `autospec=True` only when the patch target's parent is a real object — skipped when the parent is already a `MagicMock` from `sys.modules` pre-mocking. Single `Write` or single `MultiEdit` per file. One result line, no narration. |
 | `test-fixer` | haiku | *(unused — gen-tests now fixes source code directly)* | `Read, Edit, Glob, Bash` | `{"file":"...","fixed":N,"unfixable":N}` | Repair mechanical pytest failures (missing imports, wrong fixture names, bad arg counts) on test files only. Read-only on source. Retained as a standalone agent but no longer invoked by `gen-tests`; the parent skill now proposes source code improvements when tests fail. |
 | `doc-patcher` | sonnet | doc-sync | `Read, Glob, Grep, Edit, MultiEdit` | `{"file":"...","mode":"diff-patch\|template-fill","patched":bool,"reason":"..."}` | Per-doc: update ONE `docs/*.md` in place from code facts and an optional diff. Reads `index.md` plus the impacted doc only — never the full 6-doc set. ≤30 % rewrite cap; never invents identifiers; preserves French tone. |
 | `readme-patcher` | sonnet | readme-sync | `Read, Edit, MultiEdit` | `{"patched":bool,"sections_touched":[...]}` or `{"patched":false,"reason":"..."}` | Patches root `README.md` when a user-facing surface changes (CLI entries, env vars, deps). May return `patched:false` if signals fired but no semantics actually changed. Preserves French tone. |
@@ -451,20 +497,22 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 |---|---|---|
 | New repo bootstrap | `proj-init` | Step A always asks for runner (venv/poetry) and installs tools; B drops configs; C drops docs; D verifies |
 | Fix lint on what I just changed | `check-style` | Diff-driven scope; two-pass (ruff first, model second); fan-out `style-fixer` for D1xx + N803/N806 + F821 + E999; parent handles N801/N802 cross-file; never halts |
-| Security audit on what I just changed | `security` | Bandit all-level scan; concrete fix proposal per finding; consent prompt once; fan-out `security-fixer` per file; agent tries to fix everything |
+| Security audit on what I just changed | `security` | Bandit all-level scan (Pass 1) + LLM-native analysis on 6 categories HIGH confidence only (Pass 2); merged findings; consent prompt once; fan-out `security-fixer` per file; agent handles B-codes and LLM-* tags |
 | Tests for a new function | `gen-tests` (targeted) | Symbol extraction (incl. async def) → missing-only → fan-out `test-writer`; pytest verify → if failures, propose source code improvements (consent once, cap 2 iterations) |
 | Tests for whole feature branch | `gen-tests` (diff mode) | Same as above but scope = all changed `.py` |
 | Doc drift on architecture/data-model | `doc-sync` | Routing matrix; fan-out one `doc-patcher` per impacted doc; auto-applies returned patches |
 | README drift after API surface change | `readme-sync` | Five signals; `readme-patcher` patches `README.md` directly; auto-applies |
 | Quick commit on staged changes | `commit` | Compose Conventional Commit, validate, commit |
 | Branch + commit + push + PR | `commit-push-pr` | Branch from default; English title + French 1–3-bullet body |
-| Full pre-PR gate | `preflight` | All seven skills sequentially + commit-push-pr at the end |
+| Full pre-PR gate | `preflight` | All seven skills sequentially + commit-push-pr; structured output with `===…===` step separators and narration sentences; auto-stages unstaged changes after gh guards pass |
+| Unstaged changes at preflight entry | `preflight` | Auto-staged with `git add -u` + targeted untracked (`.py`, `.md`, `pyproject.toml`) after all guards pass — scratch files and temp outputs left out |
+| check-style refused findings remain | `check-style` Step 5 | `===…===` block with proposed fix per item; `AskUserQuestion`; parent applies directly on Yes |
 | Re-run on already-initialised project | `proj-init` | Hybrid policy (skip-if-identical, ask-if-conflict, create-if-missing) |
 | Fresh repo (no commits yet) | All diff-driven skills | Union pattern: `git diff` ∪ `git diff --cached` ∪ `git ls-files --others` |
 | Untracked files with new code | All diff-driven skills | Same union pattern catches them |
 | Pre-commit hook rejection | `commit`, `commit-push-pr` | Surface failure; never `--no-verify` |
 | User on default branch | `commit-push-pr` | Auto-creates `<type>/<slug>` branch |
-| Stale `.git/COMMIT_EDITMSG` | `preflight` step 7 | Overwrites; consumed and removed by step 8 |
+| Stale `.git/COMMIT_EDITMSG` | `preflight` step 7 | Removed at start of step 7 before composing new message; also removed by preflight on step 8 failure so retry recomposes fresh |
 | All findings already fixed / nothing to do | every skill | Silent no-op summary, exit 0 |
 
 ---
@@ -550,13 +598,16 @@ These exclusions are by design. Each one was a separate decision; the user opted
 
 ### 10.1 Hard constraints
 
-- **Silent execution** is enforced in SKILL.md prose; the model may not narrate.
+- **Silent execution** is enforced in SKILL.md prose for all individual skills; the model may not narrate. `preflight` is the deliberate exception: it emits structured separators and one narration sentence per Bash command.
 - **No `--no-verify`** anywhere in the commit/push commands. Pre-commit hook failures are surfaced.
 - **No force-push**. `commit-push-pr` step 3 explicitly does not pass `--force`.
 - **One file per subagent.** Each fan-out agent edits exactly the file in its input — never another. Forbidden by the agent's hard rules; would cause write conflicts when the parent issues N parallel `Task` calls.
 - **Subagents do not run `git`/`gh`.** Staging, re-verification, and PR creation are the parent's job. Only `test-writer` uses `Bash` (for pytest collection).
-- **Try everything, refuse only when ambiguous.** `security-fixer` attempts every finding including B102, B301/302/306, B608. Refuses only when genuinely ambiguous (exec with dynamic input, pickle with complex objects, SQL with unknown driver). Refused items surface in `refused[]` with structured reasons.
-- **Consent gates.** `security` asks `Yes`/`No` once before fan-out (security fixes can alter program behavior). `gen-tests` asks `Yes`/`No` before modifying source code to satisfy failing tests. `check-style` auto-applies all fixes without prompting — two-pass architecture (ruff first, model second) ensures everything is either auto-fixed or refused with a reason.
+- **Try everything, refuse only when ambiguous.** `security-fixer` attempts every finding — both B-codes and LLM-* tags. Refuses only when genuinely ambiguous. Refused items surface in `refused[]` with structured reasons.
+- **Consent gates.** `security`: consent once before fan-out. `gen-tests`: consent before modifying source code. `check-style` Step 5: consent before parent applies refused findings. `doc-sync`/`readme-sync`: no consent.
+- **No advisory bucket.** Every finding in every skill either gets an automatic fix, a consent-gated fix, or a refusal with a structured reason. Nothing is labelled "advisory" and left without a proposed fix.
+- **gen-tests stage and verify in separate Bash calls.** Never chained — pytest's exit code 1 would mask a successful `git add`.
+- **gen-tests never invokes test-fixer.** Mechanical test failures are fixed directly by the parent in the test file. Semantic failures trigger source code improvement with user consent.
 
 ### 10.2 Edge cases handled
 
@@ -583,7 +634,13 @@ These exclusions are by design. Each one was a separate decision; the user opted
 | Patch fails to apply | doc-sync, readme-sync | Print failure, continue with rest (doc-sync) or halt (readme-sync) |
 | All signals false | readme-sync | `No README change needed.` |
 | User declines a sub-skill prompt during preflight | preflight | Sub-skill exits non-zero → preflight halts at that step |
-| `.git/COMMIT_EDITMSG` exists from prior failed run | preflight step 7 / commit-push-pr | Overwritten / consumed |
+| `.git/COMMIT_EDITMSG` exists from prior failed run | preflight step 7 | Removed at step 7 start; never reused across runs |
+| sys.modules cross-contamination between test files | test-writer | `sys.modules.pop("<module>", None)` before importing module under test |
+| `autospec=True` on pre-mocked MagicMock parent | test-writer | `autospec=True` omitted when parent object is already a MagicMock — avoids `InvalidSpecError` |
+| Unstaged changes at preflight entry | preflight | Auto-staged (git add -u + targeted untracked) after gh guards pass |
+| `gh` absent when preflight would auto-stage | preflight | gh guards (#3/#4) precede auto-stage (#5) — files never staged if `gh` is missing |
+| check-style style-fixer refuses a finding | check-style Step 5 | Shown with proposed fix + `AskUserQuestion`; parent applies on Yes |
+| gen-tests mechanical test failure | gen-tests | Fixed directly in test file by parent (wrong patch path, missing import, sys.modules contamination) — no consent, no test-fixer |
 | `gh` not authenticated | commit-push-pr | `gh auth required: run gh auth login.` exit non-zero |
 | Pre-commit hook rejects | commit, commit-push-pr | Surface verbatim; no `--no-verify` |
 | PR already exists for branch | commit-push-pr | Extract URL from `gh` error, exit 0 |
@@ -600,7 +657,9 @@ Observed during empirical testing on real third-party projects:
 - **Cross-file rename heuristics** (`N801`/`N802`) rely on a word-boundary `Grep` plus per-file confirmation. A symbol that appears as a substring inside an unrelated string literal can produce a false hit; the parent reads each match before applying `MultiEdit`, but for class names that double as common English words the user may want to review the diff.
 - **Security agent tries everything but has limits.** The agent attempts all findings including B102/B301/B302/B306/B608 — but refuses when the code context is genuinely ambiguous (exec with dynamic input, pickle with custom objects, SQL with unknown DB driver, complex shell syntax). Refused items are surfaced with structured reasons in the final summary.
 
-These boundaries are observable from the outside; they are documented here as the honest limits of `v0.1.10`.
+- **LLM security pass is HIGH-confidence only.** MEDIUM-confidence issues (TOCTOU in single-process tools, injection in CLI tools where attacker = user) are correctly skipped. Users who want exhaustive coverage should supplement with manual review.
+
+These boundaries are observable from the outside; they are documented here as the honest limits of `v2.0.0`.
 
 ---
 
@@ -636,14 +695,22 @@ These are runtime-host concerns, not shell-logic concerns.
 
 ## 12. Versioning
 
-Current: `0.1.10`. Bump policy:
+Current: `2.0.0`. Bump policy:
 
-- patch (`0.1.x`) for bug fixes that do not change skill surface or output format;
-- minor (`0.x.0`) for new skills, new agents, or new options on existing skills;
-- major (`x.0.0`) for changes to severity classification, the consent/fix model, or any backwards-incompatible output format change.
+- patch (`x.x.N`) for bug fixes that do not change skill surface or output format;
+- minor (`x.N.0`) for new skills, new agents, or new options on existing skills;
+- major (`N.0.0`) for changes to severity classification, the consent/fix model, or any backwards-incompatible output format change.
 
 Version history (highlights):
 
-- **0.1.10** — `venv` (via `uv`) and `poetry` runners supported; `proj-init` always asks, even if only one is installed; runner persisted in `[tool.bt-ai].runner`. `gen-tests` covers `async def`. Per-file fan-out architecture for `check-style` (style-fixer), `security` (security-fixer), `gen-tests` (test-writer), and `doc-sync` (doc-patcher) — all `Task` calls in a single message, ≤10 per batch. Two-pass lint architecture: ruff fixes everything it can first, model fixes remaining (D1xx, N8xx, F821, E999, S* security codes). Two-bucket classification (model_fixable + advisory, no critical halt). Security scans all levels (no `-ll -ii`), proposes fixes for every finding, filters B101 from test files, consent once, agent tries to fix everything. `gen-tests` treats tests as the truth: when tests fail, proposes source code improvements (not test modifications), asks consent, applies via Edit/MultiEdit (cap 2 iterations). `style-fixer` handles S* codes (S113, S301, S311, S324, S501–S503, S506, S602/S605/S607, S608). `style-fixer` and `security-fixer` agents now exist as standalone files.
+- **0.1.10** — `venv` (via `uv`) and `poetry` runners supported; `proj-init` always asks; runner persisted in `[tool.bt-ai].runner`. `gen-tests` covers `async def`. Per-file fan-out for `check-style`, `security`, `gen-tests`, `doc-sync` — all `Task` calls in a single message. Two-pass lint: ruff first, model second. Security scans all levels, proposes fixes, consent once. `gen-tests` treats tests as truth; proposes source improvements on failure. `style-fixer` and `security-fixer` agents as standalone files.
+
+- **2.0.0** — Major revision across all skills and agents:
+  - **check-style**: advisory bucket eliminated — all findings go to `style-fixer`. New display separators (`----------------------------------` per finding, `===…===` before refused section). New Step 5: refused findings shown with proposed fixes + `AskUserQuestion`; parent applies on Yes. Final summary: `auto-fixed / consent-fixed / remaining`.
+  - **security**: LLM-native second pass added (Pass 2) — 6 categories (LLM-AUTH, LLM-INJECTION, LLM-LOGIC, LLM-SECRET, LLM-CRYPTO, LLM-SECOND-ORDER), HIGH confidence only, deduplicated vs bandit, merged into `all_findings[]`. `security-fixer` now handles both B-codes and LLM-* tags.
+  - **gen-tests**: silent rule enforced (no narration). `git add` and `pytest` in separate Bash calls. `test-fixer` banned — parent handles mechanical failures directly. Triage: mechanical (fix in test file, no consent) vs semantic (source improvement, consent, cap 2 iterations).
+  - **test-writer**: `sys.modules.setdefault` pre-mock block for heavy third-party deps. `sys.modules.pop("<module>", None)` before importing module under test (prevents cross-contamination). Explicit `mock.patch` formula with table. `autospec=True` only when parent is real (not pre-mocked). Silence formula added.
+  - **proj-init**: smart runner auto-detection from filesystem (`.venv/` → venv, `poetry.lock` → poetry, `requirements.txt` → ask, bare → ask). `AskUserQuestion` is STEP 0 — first tool call when runner is ambiguous.
+  - **preflight**: structured output — `===…===` separators between steps, `---…---` + narration sentence before every Bash command. Guard reorder: gh checks (#3/#4) before auto-stage (#5). Auto-stage uses `git add -u` + targeted untracked (not `git add -A`). `COMMIT_EDITMSG` cleaned at step 7 start and on step 8 failure.
 
 The version is declared once in `.claude-plugin/plugin.json`. Skills do not embed it.
