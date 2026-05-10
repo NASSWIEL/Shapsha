@@ -61,18 +61,22 @@ Hold the list in memory. **Do not print yet.** Branch below.
 
 ### Display remaining findings — every finding gets a code snippet
 
-For every remaining finding (in any bucket), render a 3-line block. To get the snippet, `Read` the target file with `offset = max(1, location.row - 1)` and `limit = 3`. Format:
+**Do NOT split findings into "model auto-fix" and "advisory" sections before the fan-out.** All findings are displayed uniformly. Refused findings (if any) are surfaced only after the fan-out, in Step 5.
+
+Render each finding as a block preceded by a separator. To get the snippet, `Read` the target file with `offset = max(1, location.row - 1)` and `limit = 3`. Format:
 
 ```
+----------------------------------
   <filename>:<row>:<col> <code> — <message>
     <row-1> | <previous source line>
   > <row>   | <offending source line>
     <row+1> | <next source line>
+  → <action line>
 ```
 
 If the file does not have a previous/next line (top/bottom), omit that side. Plain ASCII; no colors.
 
-For every finding, append a `→ <action>:` line that previews what the model will do:
+The `→ <action>` line previews what the model will do:
 
 | Code | Action line template |
 |---|---|
@@ -133,7 +137,13 @@ If `len(model_fixable) > 0`:
    ```
    Found <K> remaining finding(s) after ruff auto-fix — fixing with model:
 
-   <all blocks with snippets, each followed by its → action line>
+   ----------------------------------
+   <first finding: snippet + → action line>
+
+   ----------------------------------
+   <second finding: snippet + → action line>
+
+   ...
    ```
 
 2. **Immediately** run the fix sequence below. No `AskUserQuestion`.
@@ -208,30 +218,76 @@ Stage only files actually modified (skip untouched files to avoid grabbing unrel
 for f in <touched files>; do git diff --quiet -- "$f" 2>/dev/null || git add -- "$f"; done
 ```
 
-#### Final summary
+#### Step 5 — handle refused findings (with user consent)
 
-If `remaining == 0`:
-```
-Style: <fixed_count> fixed, 0 remaining.
-```
+If `agent_refused[]` is non-empty after Steps 1–4:
 
-If `remaining > 0` (agent refused some items):
-```
-Style: <fixed_count> fixed, <remaining> could not be auto-fixed.
+1. For each item in `agent_refused[]`, `Read` the target file and compose a concrete proposed fix grounded in the actual source line (same quality as the action line table above).
 
-Could not auto-fix:
-  - <filename>:<row> <code> — <reason from refused[]>
+2. Display with separators:
+
+```
+===============================================================================
+  Could not auto-fix — proposed fixes (<N>):
+===============================================================================
+
+----------------------------------
+  <filename>:<row>:<col> <code> — <message>
+    <row-1> | <previous source line>
+  > <row>   | <offending source line>
+    <row+1> | <next source line>
+  → Proposed fix: <concrete fix grounded in the actual code>
+
+----------------------------------
   ...
 ```
 
-`fixed_count` = initial `len(model_fixable)` − `remaining`.
+3. Call `AskUserQuestion` once:
+   - **header**: `Apply refused fixes`
+   - **question**: `Apply fixes for these <N> issue(s) that could not be handled automatically?`
+   - **multiSelect**: `false`
+   - **options**:
+     - label `Yes`, description `Apply all proposed fixes above`
+     - label `No`, description `Skip — these will appear as remaining in the summary`
+
+4. On `Yes`: apply each fix directly (parent, not a subagent):
+   - `Read` the file to get the exact `old_string`.
+   - `Edit` or `MultiEdit` the file in-place.
+   - Stage: `for f in <refused files>; do git diff --quiet -- "$f" 2>/dev/null || git add -- "$f"; done`
+   - Count applied items as `consent_fixed`.
+
+5. On `No`: `consent_fixed = 0`.
+
+If `agent_refused[]` is empty, skip this step entirely (`consent_fixed = 0`).
+
+#### Final summary
+
+Totals:
+- `auto_fixed` = items fixed by ruff (Pass 1) + style-fixer subagents + parent cross-file renames (Steps 1–4)
+- `consent_fixed` = items fixed in Step 5 after user approved
+
+If `auto_fixed + consent_fixed == initial len(model_fixable)`:
+```
+Style: <auto_fixed> auto-fixed, <consent_fixed> consent-fixed, 0 remaining.
+```
+(Omit `0 consent-fixed` segment when `consent_fixed == 0`: `Style: <auto_fixed> fixed, 0 remaining.`)
+
+If items remain (user declined Step 5 or some fixes failed):
+```
+Style: <auto_fixed> auto-fixed, <consent_fixed> consent-fixed, <still_remaining> remaining.
+
+Remaining:
+  - <filename>:<row> <code> — <reason>
+  ...
+```
 
 Stop with success.
 
 ### Hard rules
 
-- **Never halt.** Every finding is either auto-fixed (by ruff or the model) or refused with a reason. No `AskUserQuestion`.
-- **No advisory bucket.** The model tries to fix ALL remaining findings. If it genuinely cannot (e.g., ambiguous refactor), it refuses with a structured reason — but it tries first.
+- **Never halt silently.** Every finding is either auto-fixed (by ruff or the model) or surfaced to the user with a concrete proposed fix and a consent prompt.
+- **No advisory bucket before fan-out.** Do NOT split findings into "model auto-fix" and "advisory" sections when displaying them initially. All findings go to `style-fixer`. Refused findings appear only in Step 5, after the fan-out completes.
+- **Step 5 uses one `AskUserQuestion`.** Refused findings get a consent prompt before the parent applies them directly.
 - **Ruff first, model second.** Pass 1 lets ruff fix everything it can (cheap). Pass 2 uses the model only for what ruff left behind (smart). This minimises LLM token cost.
 - **Show the code, not just file:line.** Every remaining finding renders as a 3-line context block. The user must SEE what the model is about to change.
 - **Read before Edit.** Every model-driven `Edit`/`MultiEdit` is preceded by a `Read` on the target file so `old_string` is grounded in real text, not paraphrased.
