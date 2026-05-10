@@ -9,7 +9,6 @@ allowed-tools: Bash, Read, Glob
 
 Plugin templates root: `${CLAUDE_PLUGIN_ROOT}/templates`
 Project root: !`pwd`
-Detected lockfiles: !`ls -1 uv.lock poetry.lock 2>/dev/null | tr '\n' ' '`
 Existing runner setting: !`python -c "
 try:
     import tomllib
@@ -21,6 +20,8 @@ try:
 except Exception:
     print('<unset>')
 " 2>/dev/null || echo "<unset>"`
+venv directory: !`test -d .venv && echo "EXISTS" || echo "ABSENT"`
+requirements.txt: !`test -f requirements.txt && echo "EXISTS" || echo "ABSENT"`
 Project shape: !`python -c "
 import os
 try:
@@ -35,12 +36,16 @@ has_poetry = bool(data.get('tool', {}).get('poetry'))
 has_dep_groups = bool(data.get('dependency-groups'))
 poetry_score = (1 if has_poetry else 0) + (1 if os.path.exists('poetry.lock') else 0)
 uv_score = (1 if has_dep_groups else 0) + (1 if os.path.exists('uv.lock') else 0)
-if poetry_score > 0 and uv_score == 0:
+has_venv = os.path.isdir('.venv')
+has_req = os.path.isfile('requirements.txt')
+if poetry_score > 0 and uv_score == 0 and not has_venv:
     print('poetry')
-elif uv_score > 0 and poetry_score == 0:
+elif (uv_score > 0 or has_venv) and poetry_score == 0:
     print('uv')
 elif poetry_score > 0 and uv_score > 0:
     print('mixed')
+elif has_req:
+    print('requirements')
 else:
     print('bare')
 " 2>/dev/null || echo "bare"`
@@ -91,32 +96,35 @@ If you find yourself about to write a narrative sentence between tool calls, sto
 
 ### STEP 0 — Choose runner (MANDATORY FIRST ACTION)
 
-**This is your very first tool call. Do not run any Bash, Write, or Read before completing this step.**
+**Determine the runner using the decision table below — in order, first match wins. Do not run any other Bash, Write, or Read before this step is complete.**
 
-Check `Existing runner setting`:
+| Priority | Condition | Action |
+|---|---|---|
+| 1 | `Existing runner setting` is `uv`, `venv`, or `poetry` | Use it silently — user already chose. Skip to Step 1. |
+| 2 | `venv directory` == `EXISTS` AND `Project shape` != `poetry` | Runner = `venv`. No question. |
+| 3 | `Project shape` == `poetry` AND `venv directory` == `ABSENT` | Runner = `poetry`. No question. |
+| 4 | `Project shape` == `mixed` | Runner is ambiguous — ask (question hint: `mixed`). |
+| 5 | `requirements.txt` == `EXISTS` AND `Project shape` == `bare` | Migrating from requirements — ask (question hint: `requirements`). |
+| 6 | `Project shape` == `bare` (nothing detected) | Fresh project — ask (question hint: `bare`). |
 
-- It is `uv`, `venv`, or `poetry` → the user already chose on a previous run. Use that value silently as the runner. Skip to Step 1.
-- It is `<unset>` → **call `AskUserQuestion` RIGHT NOW** before doing anything else:
-  - **header**: `Environnement`
-  - **question**: `venv ou poetry pour ce projet ?` followed by a one-line context hint based on `Project shape`:
-    - `bare` → `Aucune préférence détectée dans pyproject.toml.`
-    - `uv` → `Le projet utilise déjà un venv (uv.lock ou [dependency-groups] détecté).`
-    - `poetry` → `Le projet utilise déjà poetry ([tool.poetry] ou poetry.lock détecté).`
-    - `mixed` → `Note : le projet contient à la fois des métadonnées poetry et uv ; choisis celui que tu veux utiliser désormais.`
-  - **multiSelect**: `false`
-  - **options**:
-    - label `venv` — description `Environnement virtuel standard (via uv). Lockfile uv.lock, dev deps sous [dependency-groups]`
-    - label `poetry` — description `Lockfile poetry.lock, dev deps sous [tool.poetry.group.dev.dependencies]`
+**When "ask" is required** (rows 4–6), call `AskUserQuestion` RIGHT NOW:
 
-Record the user's answer as the runner. Then verify the chosen tool is installed:
-- `venv` chosen → run `uv --version 2>&1`. If it fails → output `proj-init aborted: uv requis pour le mode venv. Install: https://docs.astral.sh/uv/getting-started/installation/` stop.
-- `poetry` chosen → run `poetry --version 2>&1`. If it fails → output `proj-init aborted: poetry requis. Install: https://python-poetry.org/docs/#installation` stop.
+- **header**: `Environnement`
+- **question**: `venv ou poetry pour ce projet ?` + one-line hint:
+  - `bare` → `Aucune préférence détectée — projet vierge.`
+  - `requirements` → `Un fichier requirements.txt est présent. Quel runner veux-tu utiliser ?`
+  - `mixed` → `Le projet contient à la fois des métadonnées poetry et uv ; choisis celui que tu veux utiliser désormais.`
+- **multiSelect**: `false`
+- **options**:
+  - label `venv` — description `Environnement virtuel standard (via uv). Lockfile uv.lock, dev deps sous [dependency-groups]`
+  - label `poetry` — description `Lockfile poetry.lock, dev deps sous [tool.poetry.group.dev.dependencies]`
 
-### Step 1 — Pre-flight
+After the runner is determined (auto-detected or user-chosen), verify the tool is on PATH:
 
-If neither `uv` nor `poetry` is installed (only reachable when runner was already set from a previous run):
-- `venv` runner: run `uv --version 2>&1`. Fail → abort as above.
-- `poetry` runner: run `poetry --version 2>&1`. Fail → abort as above.
+- `venv` → run `uv --version 2>&1`. If it fails → output `proj-init aborted: uv requis pour le mode venv. Install: https://docs.astral.sh/uv/getting-started/installation/` stop.
+- `poetry` → run `poetry --version 2>&1`. If it fails → output `proj-init aborted: poetry requis. Install: https://python-poetry.org/docs/#installation` stop.
+
+### Step 1 — Persist runner choice
 
 After the runner is known, persist it to `pyproject.toml` so all other skills (`check-style`, `security`, etc.) dispatch consistently. If `pyproject.toml` does not yet exist, create the minimal version described in Step 3.1 first, then add:
 
