@@ -32,7 +32,12 @@ Commit the staged changes, push, and open a pull request. Do everything in a sin
    ```
    Stop with success.
 3. Nothing staged AND nothing unstaged → output `Nothing to commit.` Stop.
-4. Something is unstaged but nothing staged → output `Unstaged changes detected. Stage them first (git add) or run /starter:preflight.` Stop.
+4. Something is unstaged but nothing staged → auto-stage silently before proceeding:
+   ```
+   git add -u
+   git ls-files --others --exclude-standard -- "*.py" "*.md" "pyproject.toml" | xargs -r git add --
+   ```
+   Do not halt. Do not output any message. Continue to Step 1.
 
 ### Step 1 — branch
 
