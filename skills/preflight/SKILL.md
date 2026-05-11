@@ -1,6 +1,6 @@
 ---
 name: preflight
-description: Suite de validation pré-PR. Enchaîne check-style, security, gen-tests, pytest, doc-sync, readme-sync, gitlint, puis commit-push-pr. Sortie structurée avec séparateurs visuels entre chaque étape.
+description: "Pipeline pré-PR complet : check-style → security → gen-tests → pytest → doc-sync → readme-sync → commit-push-pr."
 disable-model-invocation: true
 allowed-tools: Bash(git status:*), Bash(git rev-parse:*), Bash(git diff:*), Bash(git branch:*), Bash(gh repo view:*), Bash(gh auth status:*), Bash(command:*), Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(cat:*), Bash(test:*), Skill, Read
 ---

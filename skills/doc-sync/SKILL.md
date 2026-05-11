@@ -1,6 +1,6 @@
 ---
 name: doc-sync
-description: "Synchronise les docs FR dans docs/ avec les changements de code (git diff). Remplit les placeholders {{...}} au premier passage. Fan-out parallèle (un sous-agent par doc, en simultané). Le parent met à jour index.md §2 inline."
+description: "Synchronise docs/ avec les changements de code. Fan-out parallèle par doc. Met à jour index.md."
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git add:*), Bash(git status:*), Bash(git rev-parse:*), Bash(grep:*), Bash(test:*), Bash(date:*), Read, Glob, Edit, MultiEdit
 ---

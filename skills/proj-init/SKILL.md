@@ -1,6 +1,6 @@
 ---
 name: proj-init
-description: Initialise un projet Python aux standards bt-ai (outils uv/poetry, configs, gabarits doc/README). Mode silencieux hybride.
+description: "Initialise un projet Python : choix venv/poetry, outils, configs ruff/bandit/pytest, gabarits docs et README."
 disable-model-invocation: true
 allowed-tools: Bash, Read, Glob
 ---

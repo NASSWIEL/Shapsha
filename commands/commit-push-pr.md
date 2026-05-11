@@ -1,6 +1,6 @@
 ---
 allowed-tools: Bash(git checkout:*), Bash(git add:*), Bash(git status:*), Bash(git diff:*), Bash(git push:*), Bash(git commit:*), Bash(git log:*), Bash(git rev-parse:*), Bash(git branch:*), Bash(test:*), Bash(cat:*), Bash(rm:*), Bash(gh pr create:*), Bash(gh repo view:*), Bash(gh auth status:*)
-description: Commit, push, et ouvre une PR (titre en anglais, corps en français)
+description: "Commit + push + ouverture PR (titre anglais, corps français 1-3 bullets)."
 disable-model-invocation: true
 ---
 

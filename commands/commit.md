@@ -1,6 +1,6 @@
 ---
 allowed-tools: Bash(git add:*), Bash(git status:*), Bash(git diff:*), Bash(git commit:*), Bash(git log:*)
-description: Crée un Conventional Commit sur les changements stagés (message en anglais, sans préambule)
+description: "Crée un Conventional Commit sur les changements stagés (message anglais, validé via gitlint)."
 disable-model-invocation: true
 ---
 

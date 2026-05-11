@@ -1,6 +1,6 @@
 ---
 name: gen-tests
-description: "Génère des tests pytest pour les fichiers Python modifiés (ou une cible explicite). Reflète l'arborescence sous tests/. Fan-out parallèle (un sous-agent par fichier source, en simultané). Vérifie et auto-répare les échecs mécaniques. S'arrête sur les échecs sémantiques."
+description: "Génère les tests pytest manquants. Fan-out parallèle par fichier. Triage mécanique/sémantique. Améliore le code source si les tests échouent."
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash(git diff:*), Bash(git ls-files:*), Bash(printf:*), Read, Glob, Edit, MultiEdit
 ---

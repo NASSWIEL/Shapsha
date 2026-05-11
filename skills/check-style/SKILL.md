@@ -1,6 +1,6 @@
 ---
 name: check-style
-description: "Lint des fichiers Python modifiés avec ruff. Deux passes : ruff corrige tout ce qu'il peut (--fix --unsafe-fixes), puis le modèle corrige TOUT le reste (docstrings, renommages, imports, syntaxe, sécurité, complexité, refactoring) en fan-out parallèle. Pas de bucket advisory — tout est corrigé ou refusé avec raison."
+description: "Lint Python : ruff auto-fix (Pass 1) puis modèle LLM pour tout le reste — docstrings, renommages, sécurité, complexité. Fan-out parallèle. Zéro finding ignoré."
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git status:*), Bash(git rev-parse:*), Read, Edit, MultiEdit, Grep
 ---

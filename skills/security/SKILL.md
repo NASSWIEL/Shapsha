@@ -1,6 +1,6 @@
 ---
 name: security
-description: "Analyse de sécurité en deux passes : bandit (tous niveaux de sévérité) puis passe LLM-native (auth, injection, logique métier, secrets, crypto, effets de second ordre — confidence HIGH uniquement). Findings fusionnés en all_findings[], consentement unique, fan-out parallèle un sous-agent security-fixer par fichier. Tout est corrigé ou signalé."
+description: "Sécurité Python : bandit (tous niveaux) + analyse LLM-native (auth, injection, secrets, crypto). Consentement unique, fan-out parallèle."
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git rev-parse:*), Bash(git add:*), Read
 ---

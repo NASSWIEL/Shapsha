@@ -1,6 +1,6 @@
 ---
 name: readme-sync
-description: Met à jour le README.md racine uniquement si la surface utilisateur change (scripts CLI, API publique, dépendances, variables d'env, fichiers d'install). L'agent édite en place ; ce skill ne fait que stager.
+description: "Met à jour README.md si la surface utilisateur change (CLI, env vars, dépendances)."
 disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git show:*), Bash(git ls-files:*), Bash(git add:*), Bash(git rev-parse:*), Bash(test:*), Bash(grep:*), Read, Glob
 ---
