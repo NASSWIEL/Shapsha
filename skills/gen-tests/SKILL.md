@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash(git diff:*), Bash(git ls-files:*), Bash(printf:*), Read, Glob, Edit, MultiEdit
 ---
 
-# /bt-ai:gen-tests
+# /starter:gen-tests
 
 Three modes (decided from `$ARGUMENTS`):
 
@@ -33,7 +33,7 @@ Generate the missing pytest tests for the resolved targets via **parallel fan-ou
 
 ### Guards
 
-1. `pytest: NOT INSTALLED` → output `pytest not installed. Run /bt-ai:proj-init.` Stop.
+1. `pytest: NOT INSTALLED` → output `pytest not installed. Run /starter:proj-init.` Stop.
 2. Resolve target list:
    - `$ARGUMENTS` empty → use `Changed Python files`. If empty → output `No target files.` Stop with success.
    - `$ARGUMENTS == "all"` → use `All Python files`. If empty → output `No tracked .py files.` Stop with success.

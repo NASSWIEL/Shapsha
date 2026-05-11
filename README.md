@@ -2,13 +2,13 @@
 
 > Standardise les pratiques Python d'équipe : style, sécurité, tests, documentation, pré-commit.
 
-Plugin [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) qui regroupe sous des slash-commands (`/bt-ai:*`) un ensemble de skills silencieux, hermétiques et idempotents. Chaque skill agit sur le diff par défaut, applique les corrections sûres automatiquement, et n'interrompt que sur les signaux exigeant un jugement humain.
+Plugin [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) qui regroupe sous des slash-commands (`/starter:*`) un ensemble de skills silencieux, hermétiques et idempotents. Chaque skill agit sur le diff par défaut, applique les corrections sûres automatiquement, et n'interrompt que sur les signaux exigeant un jugement humain.
 
 ## Installation
 
 ```
 /plugin marketplace add NASSWIEL/bt-ai-plugin
-/plugin install bt-ai@CGI-BT-AI
+/plugin install bt-ai@Shapsha
 ```
 
 ## Pré-requis
@@ -23,21 +23,21 @@ ruff, bandit, pyright, pytest, gitlint-core sont installés par `proj-init` dans
 
 | Commande | Quand | Ce qu'elle fait |
 |---|---|---|
-| `/bt-ai:proj-init` | Une fois, à la création du projet | Demande le choix venv/poetry, installe les outils, dépose les configs et templates de docs |
-| `/bt-ai:check-style` | Après modification de fichiers `.py` | Deux passes : ruff corrige tout ce qu'il peut (`--fix --unsafe-fixes`), puis le modèle corrige **tout** le reste (docstrings, renommages, imports, syntaxe, sécurité, complexité, refactoring) en fan-out parallèle. Pas de bucket « advisory » — tout est corrigé ou refusé avec raison |
-| `/bt-ai:security` | Après modification de fichiers `.py` | Deux passes : bandit (tous niveaux de sévérité) puis analyse LLM-native (auth, injection, logique métier, secrets, crypto, effets de second ordre — confidence HIGH uniquement). Findings fusionnés, consentement unique, fan-out parallèle. L'agent tente de tout corriger — ne refuse que quand le contexte est réellement ambigu |
-| `/bt-ai:gen-tests` | Après ajout/modification de code applicatif | Génère des tests pytest en fan-out parallèle. Si les tests échouent, propose des améliorations du code source (pas des tests), demande consentement, applique (cap 2 itérations) |
-| `/bt-ai:doc-sync` | Après changement d'API publique | Patch minimal pour `docs/` et docstrings ; appliqué automatiquement |
-| `/bt-ai:readme-sync` | Après changement de surface utilisateur (CLI, env vars, deps) | Patch minimal pour `README.md` (français) ; appliqué automatiquement |
-| `/bt-ai:commit` | Pour committer manuellement | Compose un Conventional Commit, valide via gitlint, commite. Pas de push |
-| `/bt-ai:commit-push-pr` | Pour committer + pousser + ouvrir une PR | Commite (titre EN, corps FR), pousse, ouvre la PR. Refuse la branche par défaut et le force-push |
-| `/bt-ai:preflight` | Avant chaque PR | Pipeline complet (voir ci-dessous). Termine par l'URL de la PR |
+| `/starter:proj-init` | Une fois, à la création du projet | Demande le choix venv/poetry, installe les outils, dépose les configs et templates de docs |
+| `/starter:check-style` | Après modification de fichiers `.py` | Deux passes : ruff corrige tout ce qu'il peut (`--fix --unsafe-fixes`), puis le modèle corrige **tout** le reste (docstrings, renommages, imports, syntaxe, sécurité, complexité, refactoring) en fan-out parallèle. Pas de bucket « advisory » — tout est corrigé ou refusé avec raison |
+| `/starter:security` | Après modification de fichiers `.py` | Deux passes : bandit (tous niveaux de sévérité) puis analyse LLM-native (auth, injection, logique métier, secrets, crypto, effets de second ordre — confidence HIGH uniquement). Findings fusionnés, consentement unique, fan-out parallèle. L'agent tente de tout corriger — ne refuse que quand le contexte est réellement ambigu |
+| `/starter:gen-tests` | Après ajout/modification de code applicatif | Génère des tests pytest en fan-out parallèle. Si les tests échouent, propose des améliorations du code source (pas des tests), demande consentement, applique (cap 2 itérations) |
+| `/starter:doc-sync` | Après changement d'API publique | Patch minimal pour `docs/` et docstrings ; appliqué automatiquement |
+| `/starter:readme-sync` | Après changement de surface utilisateur (CLI, env vars, deps) | Patch minimal pour `README.md` (français) ; appliqué automatiquement |
+| `/starter:commit` | Pour committer manuellement | Compose un Conventional Commit, valide via gitlint, commite. Pas de push |
+| `/starter:commit-push-pr` | Pour committer + pousser + ouvrir une PR | Commite (titre EN, corps FR), pousse, ouvre la PR. Refuse la branche par défaut et le force-push |
+| `/starter:preflight` | Avant chaque PR | Pipeline complet (voir ci-dessous). Termine par l'URL de la PR |
 
 **Argument `all`** (optionnel sur `check-style`, `security`, `gen-tests`) : agit sur tout le repo au lieu du diff. Sans argument : fichiers modifiés uniquement.
 
 ## Pipeline preflight
 
-`/bt-ai:preflight` est séquentiel, halt-on-failure, sans prompt. Sortie sur succès : l'URL de la PR.
+`/starter:preflight` est séquentiel, halt-on-failure, sans prompt. Sortie sur succès : l'URL de la PR.
 
 | # | Étape | Halt si |
 |---|---|---|
@@ -80,7 +80,7 @@ Inspirée du plugin [`commit-commands`](https://github.com/anthropics/claude-cod
 
 ## Runner dispatch
 
-Skills et agents lisent `[tool.bt-ai].runner` dans `pyproject.toml` (`venv` ou `poetry`) via `tools/resolve_runner.py`, puis invoquent les outils via `<runner> run <tool>`. `venv` utilise `uv` sous le capot. Le choix est fait une fois par `proj-init` (qui demande toujours) et reste cohérent ensuite.
+Skills et agents lisent `[tool.starter].runner` dans `pyproject.toml` (`venv` ou `poetry`) via `tools/resolve_runner.py`, puis invoquent les outils via `<runner> run <tool>`. `venv` utilise `uv` sous le capot. Le choix est fait une fois par `proj-init` (qui demande toujours) et reste cohérent ensuite.
 
 `gitlint-core` est utilisé à la place de `gitlint` pour éviter la dépendance `sh` (qui échoue à compiler sur Windows à cause de `fcntl`).
 

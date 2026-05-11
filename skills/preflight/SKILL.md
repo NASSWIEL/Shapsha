@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: Bash(git status:*), Bash(git rev-parse:*), Bash(git diff:*), Bash(git branch:*), Bash(gh repo view:*), Bash(gh auth status:*), Bash(command:*), Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(cat:*), Bash(test:*), Skill, Read
 ---
 
-# /bt-ai:preflight
+# /starter:preflight
 
 ## Context
 
@@ -52,7 +52,7 @@ Run the full pre-PR validation suite and open a PR. Sub-skills handle their own 
 
 1. Branch is `<not-a-repo>` → `Halted: not a git repository.` Stop.
 2. Both Has staged and Has unstaged are `no` → `Halted: no changes to validate.` Stop.
-3. gh present is `no` → `Halted: gh CLI not installed. Install from https://cli.github.com and run 'gh auth login'. For a local-only flow use individual skills (/bt-ai:check-style, /bt-ai:security, /bt-ai:gen-tests, /bt-ai:doc-sync, /bt-ai:readme-sync, /bt-ai:commit).` Stop.
+3. gh present is `no` → `Halted: gh CLI not installed. Install from https://cli.github.com and run 'gh auth login'. For a local-only flow use individual skills (/starter:check-style, /starter:security, /starter:gen-tests, /starter:doc-sync, /starter:readme-sync, /starter:commit).` Stop.
 4. gh auth ok is `no` → `Halted: gh not authenticated. Run 'gh auth login' and retry.` Stop.
 5. Has unstaged is `yes` AND Has staged is `no` → all guards passed; silently stage changes before proceeding. Stage tracked modifications (`git add -u`) plus untracked source/config files (`.py`, `.md`, `pyproject.toml`) — nothing else. Scratch files, compiled outputs, and anything else untracked are left unstaged:
    ```
@@ -67,7 +67,7 @@ Run the full pre-PR validation suite and open a PR. Sub-skills handle their own 
    ```
    Do not halt. Do not output any message. Continue to the pipeline.
 
-**Branch on default branch**: if `Branch` equals `Default branch`, **do not halt**. The Step 8 sub-skill (`bt-ai:commit-push-pr`) auto-creates a feature branch named from the staged diff (Conventional Commit type + ≤5-word slug). Continue to the pipeline as usual.
+**Branch on default branch**: if `Branch` equals `Default branch`, **do not halt**. The Step 8 sub-skill (`starter:commit-push-pr`) auto-creates a feature branch named from the staged diff (Conventional Commit type + ≤5-word slug). Continue to the pipeline as usual.
 
 ### Pipeline (sequential, halt on first failure)
 
@@ -83,7 +83,7 @@ Output before invoking:
   Step 1 — check-style
 ===============================================================
 ```
-Invoke `bt-ai:check-style` via the Skill tool. Two-pass: ruff fixes everything it can, then model fixes remaining. Never halts.
+Invoke `starter:check-style` via the Skill tool. Two-pass: ruff fixes everything it can, then model fixes remaining. Never halts.
 
 ---
 
@@ -95,7 +95,7 @@ Output before invoking:
   Step 2 — security
 ===============================================================
 ```
-Invoke `bt-ai:security`. Scans all severity levels (bandit + LLM analysis), proposes fixes for every finding, asks consent once. Halts on user decline or if findings remain after fixes.
+Invoke `starter:security`. Scans all severity levels (bandit + LLM analysis), proposes fixes for every finding, asks consent once. Halts on user decline or if findings remain after fixes.
 
 ---
 
@@ -107,7 +107,7 @@ Output before invoking:
   Step 3 — gen-tests
 ===============================================================
 ```
-Invoke `bt-ai:gen-tests` (no arguments → diff mode). Generates tests for changed Python files. Halts on test-collection failure or unresolved semantic failures.
+Invoke `starter:gen-tests` (no arguments → diff mode). Generates tests for changed Python files. Halts on test-collection failure or unresolved semantic failures.
 
 ---
 
@@ -139,7 +139,7 @@ Output before invoking:
   Step 5 — doc-sync
 ===============================================================
 ```
-Invoke `bt-ai:doc-sync`. Auto-patches the French docs in `docs/` from the git diff. Halts only on apply failure.
+Invoke `starter:doc-sync`. Auto-patches the French docs in `docs/` from the git diff. Halts only on apply failure.
 
 ---
 
@@ -151,7 +151,7 @@ Output before invoking:
   Step 6 — readme-sync
 ===============================================================
 ```
-Invoke `bt-ai:readme-sync`. Auto-patches `README.md` if user-facing surfaces changed. No-ops silently if nothing changed.
+Invoke `starter:readme-sync`. Auto-patches `README.md` if user-facing surfaces changed. No-ops silently if nothing changed.
 
 ---
 
@@ -212,7 +212,7 @@ Output before invoking:
   Step 8 — commit · push · PR
 ===============================================================
 ```
-Invoke `bt-ai:commit-push-pr` via the Skill tool. It detects the non-empty `.git/COMMIT_EDITMSG` and uses `git commit -F`, then removes the file, pushes, and opens the PR.
+Invoke `starter:commit-push-pr` via the Skill tool. It detects the non-empty `.git/COMMIT_EDITMSG` and uses `git commit -F`, then removes the file, pushes, and opens the PR.
 
 If step 8 exits non-zero, clean up the commit message file before halting so a retry starts fresh:
 ```

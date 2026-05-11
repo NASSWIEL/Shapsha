@@ -1,6 +1,6 @@
 {
   "$schema": "https://www.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "bt-ai",
+  "name": "starter",
   "version": "2.0.0",
   "description": "Standardise les pratiques Python d'equipe : style, securite, tests, doc, pre-commit, init projet. Execution silencieuse par defaut, prompt-driven.",
   "author": {
@@ -10,5 +10,5 @@
   "homepage": "https://github.com/NASSWIEL/bt-ai-plugin",
   "repository": "https://github.com/NASSWIEL/bt-ai-plugin",
   "license": "Proprietary",
-  "keywords": ["python", "lint", "security", "tests", "docs", "cgi", "bt-ai"]
+  "keywords": ["python", "lint", "security", "tests", "docs", "cgi", "starter"]
 }

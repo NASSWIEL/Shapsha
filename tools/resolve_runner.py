@@ -12,7 +12,7 @@ on any failure. Used in SKILL.md Context blocks where the
 permission harness as ``simple_expansion``.
 
 Resolution order for the runner:
-1. ``[tool.bt-ai].runner`` from ``pyproject.toml`` if it is ``uv``, ``venv``,
+1. ``[tool.starter].runner`` from ``pyproject.toml`` if it is ``uv``, ``venv``,
    or ``poetry``.  Both ``uv`` and ``venv`` resolve to ``uv`` (venv is the
    user-facing label; uv is the tool that implements it).
 2. If only ``uv`` is installed on PATH → ``uv``.
@@ -59,7 +59,7 @@ def resolve_runner() -> str:
             data = tomllib.load(fh)
     except (FileNotFoundError, tomllib.TOMLDecodeError, OSError):
         return probe_installed()
-    runner = (data.get("tool") or {}).get("bt-ai", {}).get("runner")
+    runner = (data.get("tool") or {}).get("starter", {}).get("runner")
     if runner in ("uv", "venv"):
         return "uv"
     if runner == "poetry":

@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git add:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git status:*), Bash(git rev-parse:*), Read, Edit, MultiEdit, Grep
 ---
 
-# /bt-ai:check-style
+# /starter:check-style
 
 ## Context
 
@@ -27,7 +27,7 @@ Two-pass architecture: **ruff fixes everything it can** (cheap, fast, no LLM tok
 ### Guards
 
 1. `$ARGUMENTS` is non-empty AND not exactly `all` → output `Unknown argument: <token>. Accepts no argument or 'all'.` Stop.
-2. `ruff: NOT INSTALLED` → output `ruff not installed. Run /bt-ai:proj-init.` Stop.
+2. `ruff: NOT INSTALLED` → output `ruff not installed. Run /starter:proj-init.` Stop.
 
 ### Resolve `<files>`
 

@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(uv:*), Bash(poetry:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git rev-parse:*), Bash(git add:*), Read
 ---
 
-# /bt-ai:security
+# /starter:security
 
 ## Context
 
@@ -24,7 +24,7 @@ Run bandit on the changed (or `all`) Python files **without any severity filter*
 ### Guards
 
 1. `$ARGUMENTS` non-empty AND not exactly `all` → output `Unknown argument: <token>. Accepts no argument or 'all'.` Stop.
-2. `bandit: NOT INSTALLED` → output `bandit not installed. Run /bt-ai:proj-init.` Stop.
+2. `bandit: NOT INSTALLED` → output `bandit not installed. Run /starter:proj-init.` Stop.
 
 ### Resolve `<files>`
 

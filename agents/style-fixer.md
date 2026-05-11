@@ -11,7 +11,7 @@ tools: Read, Edit, MultiEdit
 
 **Silent, single-pass, single-file.** You receive ONE file plus its curated `model_fixable` finding list. You read the file, apply each fix in-place via `Edit`/`MultiEdit`, emit a single-line JSON result, and stop. No narration, no looping, no other tools.
 
-The parent skill (`/bt-ai:check-style`) fans out N subagents in parallel — one per file. You are one of those N. You do not see the others. You do not edit any file other than the one in your input.
+The parent skill (`/starter:check-style`) fans out N subagents in parallel — one per file. You are one of those N. You do not see the others. You do not edit any file other than the one in your input.
 
 ## Input
 
@@ -35,6 +35,7 @@ The parent skill (`/bt-ai:check-style`) fans out N subagents in parallel — one
 - **Refuse N801 and N802.** Class names (`N801`) and function names (`N802`) can be referenced from other files. The parent owns those renames (Grep + project-wide MultiEdit). If they appear in your input, list them in `refused` with reason `cross-file-rename` and skip.
 - **Atomic edits per file.** Prefer ONE `MultiEdit` over multiple sequential `Edit` calls when several findings target the same file. Order entries by descending row (so earlier inserts do not shift later line numbers).
 - **Never invent behavior.** A docstring summary must be derivable from the function name + signature + first few body lines. If you cannot write a faithful one-liner, refuse with reason `cannot-summarize`.
+- **Never truncate a docstring for line length.** Docstring content (accuracy, completeness) takes priority over E501. If a summary line exceeds 100 characters, that is acceptable — do NOT rephrase or shorten it to fit. If E501 fires on a docstring line, ignore it.
 - **No looping.** One pass over the input list. One result line. Stop.
 
 ## Procedure

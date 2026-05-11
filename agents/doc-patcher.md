@@ -11,7 +11,7 @@ tools: Read, Glob, Grep, Edit, MultiEdit
 
 **Silent, single-pass, single-file.** You receive ONE target doc. You read what you need, edit that ONE file via a single `MultiEdit` call, emit the structured JSON described under "Output" — nothing else, no preamble, no markdown wrapping, no commentary. One pass, no retry.
 
-You receive from `/bt-ai:doc-sync`:
+You receive from `/starter:doc-sync`:
 
 ```json
 {

@@ -1,7 +1,7 @@
-# `bt-ai` plugin — implementation documentation
+# `starter` plugin — implementation documentation
 
-**Plugin name**: `bt-ai`
-**Marketplace**: `CGI-BT-AI` (single-plugin marketplace, layout: plugin at repo root)
+**Plugin name**: `starter`
+**Marketplace**: `Shapsha` (single-plugin marketplace, layout: plugin at repo root)
 **Author**: shapsha-lemans <shapsha-lemans@cgi.com>
 **License**: Proprietary
 **Version**: 2.0.0
@@ -13,7 +13,7 @@ This document records what is implemented, the workflow it produces, the methodo
 
 ## 1. Purpose
 
-`bt-ai` standardises Python engineering practice for the BT-AI team at CGI. It bundles seven model-invokable skills, two deterministic slash commands, six focused subagents (five active, one retained but unused), and a set of project templates so that new repositories start on the same footing and changes are validated with the same gates before reaching `main`.
+`starter` standardises Python engineering practice for the BT-AI team at CGI. It bundles seven model-invokable skills, two deterministic slash commands, six focused subagents (five active, one retained but unused), and a set of project templates so that new repositories start on the same footing and changes are validated with the same gates before reaching `main`.
 
 The plugin's key design principle across all v2.0 changes is **zero silent drops**: every finding — whether from a linter, a security scanner, or an LLM-native analysis pass — either gets fixed automatically, fixed with user consent, or refused with a structured reason. Nothing is labelled "advisory" and left without a proposed fix.
 
@@ -33,16 +33,16 @@ skills-BT-AI/                                 ← marketplace = plugin
 │   ├── marketplace.json                      ← marketplace manifest
 │   └── plugin.json                           ← plugin manifest
 ├── commands/                                 ← deterministic shell, no model judgement
-│   ├── commit.md                             → /bt-ai:commit
-│   └── commit-push-pr.md                     → /bt-ai:commit-push-pr
+│   ├── commit.md                             → /starter:commit
+│   └── commit-push-pr.md                     → /starter:commit-push-pr
 ├── skills/                                   ← model-invokable, all disable-model-invocation: true
-│   ├── check-style/SKILL.md                  → /bt-ai:check-style
-│   ├── security/SKILL.md                     → /bt-ai:security
-│   ├── gen-tests/SKILL.md                    → /bt-ai:gen-tests
-│   ├── doc-sync/SKILL.md                     → /bt-ai:doc-sync
-│   ├── readme-sync/SKILL.md                  → /bt-ai:readme-sync
-│   ├── preflight/SKILL.md                    → /bt-ai:preflight
-│   └── proj-init/SKILL.md                    → /bt-ai:proj-init
+│   ├── check-style/SKILL.md                  → /starter:check-style
+│   ├── security/SKILL.md                     → /starter:security
+│   ├── gen-tests/SKILL.md                    → /starter:gen-tests
+│   ├── doc-sync/SKILL.md                     → /starter:doc-sync
+│   ├── readme-sync/SKILL.md                  → /starter:readme-sync
+│   ├── preflight/SKILL.md                    → /starter:preflight
+│   └── proj-init/SKILL.md                    → /starter:proj-init
 ├── agents/                                   ← silent subagents, isolated context
 │   ├── style-fixer.md
 │   ├── security-fixer.md
@@ -50,7 +50,7 @@ skills-BT-AI/                                 ← marketplace = plugin
 │   ├── test-fixer.md
 │   ├── doc-patcher.md
 │   └── readme-patcher.md
-├── templates/                                ← copied verbatim by /bt-ai:proj-init
+├── templates/                                ← copied verbatim by /starter:proj-init
 │   ├── pyproject/
 │   │   ├── ruff.toml.fragment
 │   │   ├── pyright.toml.fragment
@@ -71,7 +71,7 @@ skills-BT-AI/                                 ← marketplace = plugin
 └── DESIGN.md                                 ← original contract document
 ```
 
-Two manifests describe the marketplace and the plugin separately. `marketplace.json` lists `bt-ai` as the only plugin (source `.`); `plugin.json` declares folders for `skills`, `agents`, and `commands`.
+Two manifests describe the marketplace and the plugin separately. `marketplace.json` lists `starter` as the only plugin (source `.`); `plugin.json` declares folders for `skills`, `agents`, and `commands`.
 
 ---
 
@@ -79,12 +79,12 @@ Two manifests describe the marketplace and the plugin separately. `marketplace.j
 
 | # | Decision | Value |
 |---|----------|-------|
-| Plugin name | `bt-ai` (slash prefix) | `/bt-ai:<skill>` |
-| Marketplace name | `CGI-BT-AI` | repo + folder |
+| Plugin name | `starter` (slash prefix) | `/starter:<skill>` |
+| Marketplace name | `Shapsha` | repo + folder |
 | Layout | plugin at repo root | single-plugin marketplace |
 | Distribution | git clone + `/plugin install` | personal GitHub |
 | Python toolchain | `venv` (via `uv`) **or** `poetry`, chosen at `proj-init` time | `ruff`, `bandit`, `pyright`, `pytest`, `pytest-cov`, `gitlint-core` |
-| Runner persistence | `[tool.bt-ai].runner = "venv"|"poetry"` in `pyproject.toml` | resolved by `tools/resolve_runner.py` (`venv` maps to `uv` internally) |
+| Runner persistence | `[tool.starter].runner = "venv"|"poetry"` in `pyproject.toml` | resolved by `tools/resolve_runner.py` (`venv` maps to `uv` internally) |
 | Plugin repo README | French (dev-facing) | |
 | Template README (proj-init drops) | French (user project) | |
 | Doc templates | French | |
@@ -125,7 +125,7 @@ Every skill declares `**Silent.**` as the first paragraph after `## Operating mo
 
 ### 4.3 No automatic model invocation
 
-Every SKILL.md uses `disable-model-invocation: true`. The model never decides to run `check-style` on its own; the user must type `/bt-ai:check-style`. This is a safety property: skills perform actions (file edits, commits, PRs), and surprise invocation is a foot-gun.
+Every SKILL.md uses `disable-model-invocation: true`. The model never decides to run `check-style` on its own; the user must type `/starter:check-style`. This is a safety property: skills perform actions (file edits, commits, PRs), and surprise invocation is a foot-gun.
 
 ### 4.4 Diff-driven scope
 
@@ -202,7 +202,7 @@ Per-file fan-out is the sweet spot: agents never conflict on writes (one owner p
 
 ### 4.8 Hybrid file-creation policy
 
-`/bt-ai:proj-init` does not blindly overwrite. For each managed file:
+`/starter:proj-init` does not blindly overwrite. For each managed file:
 
 - **Absent** → create from template.
 - **Identical to template** → skip silently.
@@ -212,7 +212,7 @@ For `pyproject.toml` specifically, fragment-merging is offered: only sections mi
 
 ### 4.9 Pre-validated commit messages via `.git/COMMIT_EDITMSG`
 
-`/bt-ai:preflight` step 7 composes a Conventional Commit message from the staged diff and validates it through `gitlint --staged --msg-stdin`. On success, the message is written to `.git/COMMIT_EDITMSG`. Step 8 then invokes `/bt-ai:commit-push-pr`, which detects the file and uses `git commit -F .git/COMMIT_EDITMSG`, then `rm -f`s it. This handoff path was chosen over arguments because:
+`/starter:preflight` step 7 composes a Conventional Commit message from the staged diff and validates it through `gitlint --staged --msg-stdin`. On success, the message is written to `.git/COMMIT_EDITMSG`. Step 8 then invokes `/starter:commit-push-pr`, which detects the file and uses `git commit -F .git/COMMIT_EDITMSG`, then `rm -f`s it. This handoff path was chosen over arguments because:
 
 - it is robust to the user inspecting the message between preflight and the commit,
 - it is recoverable: if step 8 fails, the file is cleaned up by preflight before the halt message so a retry always composes a fresh message,
@@ -226,7 +226,7 @@ Step 7 also removes any stale `.git/COMMIT_EDITMSG` at its start (before composi
 
 ### 5.1 Slash commands (deterministic)
 
-#### `/bt-ai:commit`
+#### `/starter:commit`
 
 **Use case**: produce a Conventional Commit on already-staged changes, English, no PR.
 
@@ -238,7 +238,7 @@ Step 7 also removes any stale `.git/COMMIT_EDITMSG` at its start (before composi
 
 **Tool allowlist**: `git add`, `git status`, `git diff`, `git commit`, `git log`. No `--no-verify`. Pre-commit hook rejection is surfaced verbatim.
 
-#### `/bt-ai:commit-push-pr`
+#### `/starter:commit-push-pr`
 
 **Use case**: end-to-end "ship a feature": branch creation if on default branch, commit, push, PR.
 
@@ -254,7 +254,7 @@ Step 7 also removes any stale `.git/COMMIT_EDITMSG` at its start (before composi
 
 ### 5.2 Skills
 
-#### `/bt-ai:check-style`
+#### `/starter:check-style`
 
 **Use case**: lint changed Python files; auto-fix everything possible, never halt, never prompt.
 
@@ -275,7 +275,7 @@ Step 7 also removes any stale `.git/COMMIT_EDITMSG` at its start (before composi
 
 **Output**: `Style: <auto_fixed> auto-fixed, <consent_fixed> consent-fixed, <still_remaining> remaining.` (refused reasons listed if any).
 
-#### `/bt-ai:security`
+#### `/starter:security`
 
 **Use case**: scan changed Python files for security issues using bandit (SAST) + an LLM-native second pass (deep reasoning). Propose fixes for everything, fix on approval.
 
@@ -293,14 +293,14 @@ Step 7 also removes any stale `.git/COMMIT_EDITMSG` at its start (before composi
 
 **Output**: `Security: <applied> fixed, <refused> could not be auto-fixed, <remaining> remaining, <deps_vulns> dependency vuln(s), <secrets_found> potential secret(s).` Segments whose tool is `n/a` are omitted.
 
-#### `/bt-ai:gen-tests`
+#### `/starter:gen-tests`
 
 **Use case**: ensure every public function in a changed file has a corresponding pytest test.
 
 **Three modes**:
 - **Diff mode** (no args): scans changed `*.py` excluding `tests/**`.
 - **Full sweep** (`all`): every tracked `*.py` excluding `tests/**`.
-- **Targeted mode** (`/bt-ai:gen-tests path1 path2 ...`): scans those files/dirs explicitly.
+- **Targeted mode** (`/starter:gen-tests path1 path2 ...`): scans those files/dirs explicitly.
 
 **Path mapping**: `src/foo/bar.py` → `tests/foo/test_bar.py`; `foo/bar.py` (no `src/` prefix) → `tests/foo/test_bar.py`; `pkg.py` at root → `tests/test_pkg.py`.
 
@@ -315,7 +315,7 @@ Step 7 also removes any stale `.git/COMMIT_EDITMSG` at its start (before composi
 - **Mechanical** (test plumbing bugs — test-writer errors, not source deficiencies): wrong `mock.patch` target path, missing import, wrong fixture, `sys.modules` cross-contamination across test files. Fixed directly in the test file by the parent — no consent needed.
 - **Semantic** (real assertion mismatches — source code deficiency): the parent reads the failing test and source, proposes concrete improvements, asks consent once (`AskUserQuestion`), applies to source files via `Edit`/`MultiEdit`, and re-runs (cap 2 iterations). Halt only if failures persist after 2 iterations.
 
-#### `/bt-ai:doc-sync`
+#### `/starter:doc-sync`
 
 **Use case**: keep `docs/*.md` aligned with code changes without rewriting unrelated sections.
 
@@ -340,7 +340,7 @@ Step 7 also removes any stale `.git/COMMIT_EDITMSG` at its start (before composi
 
 **Auto-apply**: patches are minimal by construction (≤30 % rewrite cap inside the agent, which never invents identifiers and preserves French tone). `doc-sync` therefore applies what comes back without an `AskUserQuestion`. A patch that fails to apply is reported but does not abort the rest.
 
-#### `/bt-ai:readme-sync`
+#### `/starter:readme-sync`
 
 **Use case**: only patch `README.md` when a **user-facing** surface changed.
 
@@ -355,7 +355,7 @@ Step 7 also removes any stale `.git/COMMIT_EDITMSG` at its start (before composi
 
 **French tone preservation**: hardcoded into the agent prompt.
 
-#### `/bt-ai:preflight`
+#### `/starter:preflight`
 
 **Use case**: pre-PR validation suite. Sequential, halt on first failure.
 
@@ -384,7 +384,7 @@ Guard order is critical: `gh` checks (#3/#4) run before auto-stage (#5) so files
 
 **Output**: PR URL on full success; `Halted at step <N>: <reason>.` followed by the failing tool's verbatim output otherwise.
 
-#### `/bt-ai:proj-init`
+#### `/starter:proj-init`
 
 **Use case**: bootstrap a new (or partly initialised) project with the team's standards.
 
@@ -392,14 +392,14 @@ Guard order is critical: `gh` checks (#3/#4) run before auto-stage (#5) so files
 
 | Priority | Condition | Action |
 |---|---|---|
-| 1 | `[tool.bt-ai].runner` already set in `pyproject.toml` | Reuse silently |
+| 1 | `[tool.starter].runner` already set in `pyproject.toml` | Reuse silently |
 | 2 | `.venv/` directory exists (and no poetry markers) | `venv`, no question |
 | 3 | `poetry.lock` or `[tool.poetry]` in `pyproject.toml` (no `.venv/`) | `poetry`, no question |
 | 4 | Mixed signals | Ask user |
 | 5 | Only `requirements.txt` (bare pyproject) | Ask user (migration case) |
 | 6 | Bare project | Ask user |
 
-When asking, the call to `AskUserQuestion` is the very first tool call — no Bash or Write precedes it. After the runner is known, the chosen tool is verified on PATH (abort with install URL if absent). The choice is persisted as `[tool.bt-ai].runner = "venv"|"poetry"` in `pyproject.toml`. `venv` is backed by `uv` internally.
+When asking, the call to `AskUserQuestion` is the very first tool call — no Bash or Write precedes it. After the runner is known, the chosen tool is verified on PATH (abort with install URL if absent). The choice is persisted as `[tool.starter].runner = "venv"|"poetry"` in `pyproject.toml`. `venv` is backed by `uv` internally.
 
 **Step 1 — install dev tools**: then:
 
@@ -458,14 +458,14 @@ All subagents are **silent**, return a single-line JSON result, and never run `g
    (then either: uv init                               → uv pyproject
     or:          poetry init -n && poetry install      → poetry pyproject)
 2. /plugin install bt-ai (from the marketplace)
-3. /bt-ai:proj-init
+3. /starter:proj-init
    ├─ asks for runner: venv or poetry (always asks)
-   ├─ persists [tool.bt-ai].runner in pyproject.toml
+   ├─ persists [tool.starter].runner in pyproject.toml
    ├─ <runner> add (--dev | --group dev) ruff bandit pyright pytest pytest-cov gitlint-core
    ├─ creates .gitlint, .gitignore, docs/, README.md
    └─ patches pyproject.toml with [tool.ruff], [tool.pyright], [tool.bandit], [tool.pytest.ini_options]
 4. write some code
-5. /bt-ai:preflight
+5. /starter:preflight
    ├─ check-style → security → gen-tests → pytest → doc-sync → readme-sync → commit-msg-gate → commit-push-pr
    └─ outputs PR URL
 ```
@@ -473,21 +473,21 @@ All subagents are **silent**, return a single-line JSON result, and never run `g
 ### 6.2 Existing project (one-off validation)
 
 ```
-1. /bt-ai:check-style       (changed files only)
-2. /bt-ai:security
-3. /bt-ai:gen-tests src/foo (targeted mode — explicit path)
-4. /bt-ai:doc-sync          (only if docs/ exists)
-5. /bt-ai:readme-sync
-6. /bt-ai:commit            (or /bt-ai:commit-push-pr for the full path)
+1. /starter:check-style       (changed files only)
+2. /starter:security
+3. /starter:gen-tests src/foo (targeted mode — explicit path)
+4. /starter:doc-sync          (only if docs/ exists)
+5. /starter:readme-sync
+6. /starter:commit            (or /starter:commit-push-pr for the full path)
 ```
 
 ### 6.3 Iterative loop during a feature
 
 ```
-edit code → /bt-ai:check-style → fix → /bt-ai:security → fix → /bt-ai:gen-tests → ... → /bt-ai:preflight
+edit code → /starter:check-style → fix → /starter:security → fix → /starter:gen-tests → ... → /starter:preflight
 ```
 
-Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs them all in order; passing intermediate skills is cheap because diff-driven scope is small.
+Each individual skill is independent and idempotent. `/starter:preflight` re-runs them all in order; passing intermediate skills is cheap because diff-driven scope is small.
 
 ---
 
@@ -521,11 +521,11 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 
 ### 8.1 `venv` (via `uv`) or `poetry` (package manager)
 
-**Why both**: `proj-init` always asks the user to choose between `venv` and `poetry`, persists the choice in `[tool.bt-ai].runner`, and every subsequent skill resolves the runner via `tools/resolve_runner.py`. `venv` is backed by `uv` internally — `uv` manages standard virtual environments and runs tools via `uv run <tool>`. `poetry` uses `poetry run <tool>`. Hatch and PDM are not currently supported.
+**Why both**: `proj-init` always asks the user to choose between `venv` and `poetry`, persists the choice in `[tool.starter].runner`, and every subsequent skill resolves the runner via `tools/resolve_runner.py`. `venv` is backed by `uv` internally — `uv` manages standard virtual environments and runs tools via `uv run <tool>`. `poetry` uses `poetry run <tool>`. Hatch and PDM are not currently supported.
 
 **Why a runner key in `pyproject.toml`**: the alternative — re-detecting at every skill invocation by inspecting lockfiles — is brittle (a project may have stale `uv.lock` next to a fresh `poetry.lock` during a migration). Persisting the user's explicit choice removes the ambiguity.
 
-**Trade-off**: a project that switches from one to the other manually (without re-running `proj-init`) will keep the old runner until `[tool.bt-ai].runner` is edited. This is intentional — `proj-init` is the only place the runner can change.
+**Trade-off**: a project that switches from one to the other manually (without re-running `proj-init`) will keep the old runner until `[tool.starter].runner` is edited. This is intentional — `proj-init` is the only place the runner can change.
 
 ### 8.2 `ruff` (lint + format)
 
@@ -543,7 +543,7 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 
 ### 8.4 `pyright` (type checking)
 
-**Why**: configured by `proj-init` as a baseline (`[tool.pyright]` fragment) but not gated by `/bt-ai:preflight`. The team chose to make types observable without making them blocking. Verified at install time in step D.
+**Why**: configured by `proj-init` as a baseline (`[tool.pyright]` fragment) but not gated by `/starter:preflight`. The team chose to make types observable without making them blocking. Verified at install time in step D.
 
 ### 8.5 `pytest` + `pytest-cov`
 
@@ -557,7 +557,7 @@ Each individual skill is independent and idempotent. `/bt-ai:preflight` re-runs 
 
 ### 8.7 `gh` (GitHub CLI)
 
-**Why**: used by `/bt-ai:commit-push-pr` for `gh pr create`, `gh repo view`, `gh auth status`. Authoritative for PR creation; respects user's existing auth. Pre-flight in `commit-push-pr` and step 8 of `preflight` halt if `gh auth status` fails — no silent retry.
+**Why**: used by `/starter:commit-push-pr` for `gh pr create`, `gh repo view`, `gh auth status`. Authoritative for PR creation; respects user's existing auth. Pre-flight in `commit-push-pr` and step 8 of `preflight` halt if `gh auth status` fails — no silent retry.
 
 ### 8.8 Conventional Commits 1.0
 
@@ -649,7 +649,7 @@ These exclusions are by design. Each one was a separate decision; the user opted
 
 Observed during empirical testing on real third-party projects:
 
-- **Both runners supported, but mixing is not.** `proj-init` asks the user to choose `venv` or `poetry` and persists the choice in `[tool.bt-ai].runner`. `venv` maps to `uv` internally. If the user later switches managers manually without re-running `proj-init`, the runner key may diverge from the actual lockfile state.
+- **Both runners supported, but mixing is not.** `proj-init` asks the user to choose `venv` or `poetry` and persists the choice in `[tool.starter].runner`. `venv` maps to `uv` internally. If the user later switches managers manually without re-running `proj-init`, the runner key may diverge from the actual lockfile state.
 - **No default `extend-exclude` for generated code.** ANTLR parsers, protobuf stubs, etc. will produce noisy findings; projects with generated files need per-file ignores added manually.
 - **`gen-tests` package-name resolution** reads `[project] name` from `pyproject.toml`. Multi-namespace projects (where `from src.X` and `from <pkg>.Y` coexist) may receive imports tied to the wrong root.
 - **`doc-sync` is hardcoded to `docs/`.** Projects with root-level docs or a different docs root are not covered.
@@ -703,7 +703,7 @@ Current: `2.0.0`. Bump policy:
 
 Version history (highlights):
 
-- **0.1.10** — `venv` (via `uv`) and `poetry` runners supported; `proj-init` always asks; runner persisted in `[tool.bt-ai].runner`. `gen-tests` covers `async def`. Per-file fan-out for `check-style`, `security`, `gen-tests`, `doc-sync` — all `Task` calls in a single message. Two-pass lint: ruff first, model second. Security scans all levels, proposes fixes, consent once. `gen-tests` treats tests as truth; proposes source improvements on failure. `style-fixer` and `security-fixer` agents as standalone files.
+- **0.1.10** — `venv` (via `uv`) and `poetry` runners supported; `proj-init` always asks; runner persisted in `[tool.starter].runner`. `gen-tests` covers `async def`. Per-file fan-out for `check-style`, `security`, `gen-tests`, `doc-sync` — all `Task` calls in a single message. Two-pass lint: ruff first, model second. Security scans all levels, proposes fixes, consent once. `gen-tests` treats tests as truth; proposes source improvements on failure. `style-fixer` and `security-fixer` agents as standalone files.
 
 - **2.0.0** — Major revision across all skills and agents:
   - **check-style**: advisory bucket eliminated — all findings go to `style-fixer`. New display separators (`----------------------------------` per finding, `===…===` before refused section). New Step 5: refused findings shown with proposed fixes + `AskUserQuestion`; parent applies on Yes. Final summary: `auto-fixed / consent-fixed / remaining`.

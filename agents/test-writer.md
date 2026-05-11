@@ -13,11 +13,11 @@ tools: Read, Write, Edit, MultiEdit, Glob, Bash
 
 No narration. No status updates. No looping. No text outside the single result line. The only visible output you produce is the `file=… tests_added=… omitted=… collection_ok=…` line at the end.
 
-The parent skill (`/bt-ai:gen-tests`) fans out N subagents in parallel — one per target. You are one of those N. You do not see the others.
+The parent skill (`/starter:gen-tests`) fans out N subagents in parallel — one per target. You are one of those N. You do not see the others.
 
 ## Input
 
-You receive from `/bt-ai:gen-tests`:
+You receive from `/starter:gen-tests`:
 
 ```json
 {
@@ -89,6 +89,17 @@ You receive from `/bt-ai:gen-tests`:
 
    For each `from X.Y.Z import name` in the source, register `X`, `X.Y`, AND `X.Y.Z` (all levels). `setdefault` is a no-op if the real library is already in `sys.modules`, so this is safe when the library IS installed.
 
+   **Immediately after the pre-mock block and before importing the module under test**, add a `sys.modules.pop` line for the module itself. This prevents cross-contamination when pytest runs multiple test files in the same session — an earlier test file may have pre-mocked this module, and without the pop the real module would never load:
+
+   ```python
+   # Evict any stale mock of the module under test from a previous test file
+   sys.modules.pop("rag_engine", None)
+
+   from rag_engine import RAGEngine  # always gets the real module
+   ```
+
+   The pattern is: pre-mock the **dependencies** with `setdefault` (no-op if real), then `pop` the **module under test** itself (force a fresh import).
+
 3c. **`mock.patch` path formula** — the patch target must be the module **where the name is looked up at call time** (where it was imported into), NOT where it is defined.
 
    **Formula**: `patch("<module_under_test>.<name_as_imported_there>")`
@@ -101,12 +112,21 @@ You receive from `/bt-ai:gen-tests`:
 
    Always `Read` the source file and find the exact import line before writing the patch path. Never guess from the origin module.
 
-   Use `autospec=True` on every `patch()` call. A wrong patch path raises `AttributeError` immediately with `autospec=True` (because it cannot introspect a name that does not exist), giving instant feedback instead of a silent mock that accepts all calls:
+   Use `autospec=True` on `patch()` calls **only when the patch target's parent is a real (non-mocked) object**. When the parent module was pre-mocked via `sys.modules` (step 3b), its attributes are already `MagicMock` instances — `autospec=True` on a sub-attribute of a `MagicMock` raises `InvalidSpecError` because Python cannot introspect a mock to build a spec.
+
+   **Rule**: if the module under test was loaded with a pre-mocked dependency (e.g. `requests` replaced by a `MagicMock` in `sys.modules`), patch attributes of that dependency **without** `autospec=True`:
 
    ```python
-   with patch("rag_engine.setup_text", autospec=True) as mock_setup:
+   # requests is pre-mocked → do NOT use autospec=True on requests.get
+   with patch("pdf_loader.requests.get", return_value=mock_response):
+       ...
+
+   # A real stdlib function → autospec=True is safe
+   with patch("pdf_loader.os.path.exists", autospec=True, return_value=True):
        ...
    ```
+
+   When in doubt, omit `autospec=True` rather than risk `InvalidSpecError`.
 
 4. **Generate tests per symbol** (1-3 `test_<name>*` functions per symbol):
 

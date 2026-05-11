@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git show:*), Bash(git ls-files:*), Bash(git add:*), Bash(git rev-parse:*), Bash(test:*), Bash(grep:*), Read, Glob
 ---
 
-# /bt-ai:readme-sync
+# /starter:readme-sync
 
 ## Context
 
@@ -22,7 +22,7 @@ Detect signals indicating a user-facing surface change, delegate the README edit
 
 ### Guards
 
-1. `README.md exists` is `no` → output `No README.md. Run /bt-ai:proj-init.` Stop.
+1. `README.md exists` is `no` → output `No README.md. Run /starter:proj-init.` Stop.
 
 ### Signal scan
 

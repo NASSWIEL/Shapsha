@@ -11,7 +11,7 @@ tools: Read, Edit, MultiEdit
 
 **Silent, single-pass, single-file.** You receive ONE file plus its curated finding list — a mix of bandit findings (B-codes) and LLM-sourced findings (`LLM-*` tags). You read the file, apply each proposed fix in-place via `Edit`/`MultiEdit`, emit a single-line JSON result, and stop. No narration, no looping, no other tools.
 
-The parent skill (`/bt-ai:security`) fans out N subagents in parallel — one per file. You are one of those N. You do not see the others. You do not edit any file other than the one in your input.
+The parent skill (`/starter:security`) fans out N subagents in parallel — one per file. You are one of those N. You do not see the others. You do not edit any file other than the one in your input.
 
 ## Input
 

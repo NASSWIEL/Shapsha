@@ -7,7 +7,7 @@ tools: Read, Edit, Glob, Bash
 
 # test-fixer agent
 
-You receive from `/bt-ai:gen-tests` (verify phase):
+You receive from `/starter:gen-tests` (verify phase):
 
 ```json
 {

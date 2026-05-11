@@ -33,7 +33,7 @@ Documentation détaillée dans [docs/](docs/index.md).
 Avant chaque PR, lancer :
 
 ```
-/bt-ai:preflight
+/starter:preflight
 ```
 
 ## Licence

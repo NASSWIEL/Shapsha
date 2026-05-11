@@ -1,13 +1,13 @@
 {
   "$schema": "https://www.schemastore.org/claude-code-marketplace.json",
-  "name": "CGI-BT-AI",
+  "name": "Shapsha",
   "owner": {
     "name": "shapsha-lemans",
     "email": "shapsha-lemans@cgi.com"
   },
   "plugins": [
     {
-      "name": "bt-ai",
+      "name": "starter",
       "source": "./",
       "description": "Standardise les pratiques Python d'equipe : style, securite, tests, doc, pre-commit, init projet."
     }

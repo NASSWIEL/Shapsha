@@ -4,7 +4,7 @@ description: Crée un Conventional Commit sur les changements stagés (message e
 disable-model-invocation: true
 ---
 
-# /bt-ai:commit
+# /starter:commit
 
 ## Context
 

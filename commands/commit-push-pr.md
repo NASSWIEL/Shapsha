@@ -4,7 +4,7 @@ description: Commit, push, et ouvre une PR (titre en anglais, corps en français
 disable-model-invocation: true
 ---
 
-# /bt-ai:commit-push-pr
+# /starter:commit-push-pr
 
 ## Context
 
@@ -28,11 +28,11 @@ Commit the staged changes, push, and open a pull request. Do everything in a sin
    ```
    Pushed. Skipping PR creation: gh CLI not authenticated.
    The 'gh' CLI is independent from git credentials — it needs its own login to call the GitHub API.
-   To enable PR creation: run 'gh auth login' once, then retry /bt-ai:commit-push-pr (or use 'gh pr create' manually).
+   To enable PR creation: run 'gh auth login' once, then retry /starter:commit-push-pr (or use 'gh pr create' manually).
    ```
    Stop with success.
 3. Nothing staged AND nothing unstaged → output `Nothing to commit.` Stop.
-4. Something is unstaged but nothing staged → output `Unstaged changes detected. Stage them first (git add) or run /bt-ai:preflight.` Stop.
+4. Something is unstaged but nothing staged → output `Unstaged changes detected. Stage them first (git add) or run /starter:preflight.` Stop.
 
 ### Step 1 — branch
 

@@ -11,7 +11,7 @@ tools: Read, Edit, MultiEdit
 
 **Silent.** Read README.md once, identify impacted sections from the signals, edit in place, emit the structured JSON described under "Output" — nothing else.
 
-You receive from `/bt-ai:readme-sync`:
+You receive from `/starter:readme-sync`:
 
 ```json
 {

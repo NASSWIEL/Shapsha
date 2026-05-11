@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: Bash, Read, Glob
 ---
 
-# /bt-ai:proj-init
+# /starter:proj-init
 
 Plugin templates root: `${CLAUDE_PLUGIN_ROOT}/templates`
 Project root: !`pwd`
@@ -16,7 +16,7 @@ except ImportError:
     import tomli as tomllib
 try:
     data = tomllib.load(open('pyproject.toml','rb'))
-    print(data.get('tool',{}).get('bt-ai',{}).get('runner','<unset>'))
+    print(data.get('tool',{}).get('starter',{}).get('runner','<unset>'))
 except Exception:
     print('<unset>')
 " 2>/dev/null || echo "<unset>"`
@@ -129,7 +129,7 @@ After the runner is determined (auto-detected or user-chosen), verify the tool i
 After the runner is known, persist it to `pyproject.toml` so all other skills (`check-style`, `security`, etc.) dispatch consistently. If `pyproject.toml` does not yet exist, create the minimal version described in Step 3.1 first, then add:
 
 ```toml
-[tool.bt-ai]
+[tool.starter]
 runner = "<venv|poetry>"
 ```
 
@@ -140,15 +140,15 @@ Persistence script (the skill substitutes `<RUNNER>` before running):
 import os, re
 runner = '<RUNNER>'
 text = open('pyproject.toml').read() if os.path.exists('pyproject.toml') else ''
-if '[tool.bt-ai]' not in text:
+if '[tool.starter]' not in text:
     sep = '\n' if text and not text.endswith('\n') else ''
-    text += f'{sep}[tool.bt-ai]\nrunner = \"{runner}\"\n'
+    text += f'{sep}[tool.starter]\nrunner = \"{runner}\"\n'
 else:
     pattern = re.compile(r'(\[tool\.bt-ai\][^[]*?runner\s*=\s*)\"[^\"]*\"', re.DOTALL)
     if pattern.search(text):
         text = pattern.sub(rf'\g<1>\"{runner}\"', text, count=1)
     else:
-        text = text.replace('[tool.bt-ai]', f'[tool.bt-ai]\nrunner = \"{runner}\"', 1)
+        text = text.replace('[tool.starter]', f'[tool.starter]\nrunner = \"{runner}\"', 1)
 open('pyproject.toml','w').write(text)
 "
 ```

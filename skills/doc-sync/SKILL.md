@@ -5,7 +5,7 @@ disable-model-invocation: true
 allowed-tools: Bash(python:*), Bash(git diff:*), Bash(git ls-files:*), Bash(git add:*), Bash(git status:*), Bash(git rev-parse:*), Bash(grep:*), Bash(test:*), Bash(date:*), Read, Glob, Edit, MultiEdit
 ---
 
-# /bt-ai:doc-sync
+# /starter:doc-sync
 
 ## Context
 
@@ -22,7 +22,7 @@ Detect mode (template-fill or diff-patch), fan out **N parallel `doc-patcher` su
 
 ### Guards
 
-1. `docs/ exists` is `no` → output `docs/ folder absent. Run /bt-ai:proj-init first.` Stop.
+1. `docs/ exists` is `no` → output `docs/ folder absent. Run /starter:proj-init first.` Stop.
 2. Diff stat is empty AND "Docs with placeholders" is empty → output `No code changes detected. Docs unchanged.` Stop with success.
 
 If diff stat is empty BUT placeholder docs exist, that's **template-fill mode** (first authoring after proj-init). Continue.
