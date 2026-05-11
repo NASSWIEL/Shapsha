@@ -1,4 +1,4 @@
-# starter — plugin Claude Code
+# Shapsha — plugin Claude Code
 
 > Standardise les pratiques Python d'équipe : style, sécurité, tests, documentation, pré-commit.
 
