@@ -1,14 +1,14 @@
-# bt-ai — plugin Claude Code
+# starter — plugin Claude Code
 
 > Standardise les pratiques Python d'équipe : style, sécurité, tests, documentation, pré-commit.
 
-Plugin [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) qui regroupe sous des slash-commands (`/starter:*`) un ensemble de skills silencieux, hermétiques et idempotents. Chaque skill agit sur le diff par défaut, applique les corrections sûres automatiquement, et n'interrompt que sur les signaux exigeant un jugement humain.
+Plugin [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) qui regroupe sous des slash-commands (`/starter:*`) un ensemble de skills silencieux, hermétiques et idempotents. Chaque skill agit sur le diff par défaut, applique les corrections sûres automatiquement, et n'interrompt que sur les signaux exigeant un jugement humain. Principe central : **zéro drop silencieux** — chaque finding est soit corrigé automatiquement, soit corrigé avec consentement, soit refusé avec une raison structurée.
 
 ## Installation
 
 ```
 /plugin marketplace add NASSWIEL/bt-ai-plugin
-/plugin install bt-ai@Shapsha
+/plugin install starter@Shapsha
 ```
 
 ## Pré-requis
@@ -50,9 +50,9 @@ ruff, bandit, pyright, pytest, gitlint-core sont installés par `proj-init` dans
 | 7 | Compose + valide message via gitlint | Gitlint rejette après une réécriture |
 | 8 | `commit-push-pr` | `gh pr create` échoue |
 
-**Gardes initiales** : refus si pas de repo git, aucun changement, changements unstaged uniquement, branche par défaut, ou `gh` absent / non authentifié.
+**Gardes initiales** (dans l'ordre) : refus si pas de repo git, aucun changement, `gh` absent, `gh` non authentifié. Si les changements sont uniquement unstaged : auto-stage ciblé (`git add -u` + fichiers `.py`/`.md`/`pyproject.toml` non-trackés) puis continuation — les fichiers scratch et temp ne sont pas stagés.
 
-**Stage handoff** : chaque sous-skill `git add` ses propres outputs ; preflight ne stage jamais les changements de l'utilisateur à sa place.
+**Stage handoff** : chaque sous-skill `git add` ses propres outputs. Les changements utilisateur sont auto-stagés par preflight uniquement si rien n'est stagé à l'entrée.
 
 ## Sous-agents
 
@@ -74,7 +74,7 @@ Inspirée du plugin [`commit-commands`](https://github.com/anthropics/claude-cod
 - **Silence par défaut.** L'utilisateur voit le diff, le résultat final, ou la halt-line. Pas de narration intermédiaire.
 - **Skills en tant que prompts**, pas state machines : prompts courts (≤ 100 lignes), contexte injecté via `!command` pré-exécuté, single-message incantation pour forcer les appels d'outils en parallèle.
 - **`allowed-tools` étroits** (`Bash(git status:*)` plutôt que `Bash`) pour éviter les confirmations sur le chemin heureux.
-- **`AskUserQuestion` uniquement pour l'ambiguïté réelle.** Seul `proj-init` (choix `venv`/`poetry`), `security` (consentement avant correction) et `gen-tests` (consentement avant modification du code source) en utilisent.
+- **`AskUserQuestion` uniquement pour l'ambiguïté réelle.** `proj-init` (choix `venv`/`poetry`), `security` (consentement avant correction), `gen-tests` (consentement avant modification du code source), et `check-style` étape 5 (consentement avant application des findings refusés par le style-fixer).
 - **Refus systématiques** : pas de `--no-verify`, pas de `--force` push, pas de push sur la branche par défaut.
 - **Hermétique.** Tous les helpers Python du plugin vivent sous `${CLAUDE_PLUGIN_ROOT}/tools/`. Aucun script auxiliaire n'est jamais écrit dans le repo de l'utilisateur.
 
