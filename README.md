@@ -7,7 +7,7 @@ Plugin [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) qui r
 ## Installation
 
 ```
-/plugin marketplace add NASSWIEL/bt-ai-plugin
+/plugin marketplace add NASSWIEL/Shapsha
 /plugin install starter@Shapsha
 ```
 
