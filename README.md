@@ -170,17 +170,7 @@ Installe ces outils **avant** de lancer le plugin, dans cet ordre :
 ### 1. Python 3.12+
 Vérifie avec `python --version`. Télécharger sur [python.org](https://www.python.org/downloads/).
 
-### 2. `uv` ou `poetry` (au moins l'un des deux)
-
-```bash
-# uv (recommandé)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# ou poetry
-pip install poetry
-```
-
-### 3. `git`
+### 2. `git`
 Normalement déjà présent. Vérifie avec `git --version`. Sinon : [git-scm.com](https://git-scm.com/).
 
 ### 4. `gh` — GitHub CLI
