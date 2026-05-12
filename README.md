@@ -165,12 +165,57 @@ Complexité cyclomatique max : **10** (configurable via `[tool.ruff.lint.mccabe]
 
 ## 📋 Pré-requis
 
-- **[`uv`](https://docs.astral.sh/uv/)** ou **[`poetry`](https://python-poetry.org/)** — au moins l'un des deux
-- **`git`**
-- **[`gh`](https://cli.github.com)** authentifié (`gh auth login`) — requis pour `commit-push-pr` et `preflight`
+Installe ces outils **avant** de lancer le plugin, dans cet ordre :
 
-Les outils suivants sont installés automatiquement par `proj-init` dans l'environnement du projet :
-`ruff` · `bandit` · `pyright` · `pytest` · `pytest-cov` · `gitlint-core`
+### 1. Python 3.12+
+Vérifie avec `python --version`. Télécharger sur [python.org](https://www.python.org/downloads/).
+
+### 2. `uv` ou `poetry` (au moins l'un des deux)
+
+```bash
+# uv (recommandé)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# ou poetry
+pip install poetry
+```
+
+### 3. `git`
+Normalement déjà présent. Vérifie avec `git --version`. Sinon : [git-scm.com](https://git-scm.com/).
+
+### 4. `gh` — GitHub CLI
+
+```bash
+# Windows
+winget install GitHub.cli
+
+# macOS
+brew install gh
+```
+
+Puis authentifie-toi :
+```bash
+gh auth login
+# Suivre les étapes : GitHub.com → HTTPS → Login with browser
+```
+
+### 5. Claude Code
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+### 6. Un repo git initialisé
+
+```bash
+git init
+git remote add origin https://github.com/user/mon-projet.git
+```
+
+---
+
+> **Installé automatiquement par `/starter:proj-init`** — pas besoin de le faire manuellement :
+> `ruff` · `bandit` · `pyright` · `pytest` · `pytest-cov` · `gitlint-core`
 
 ---
 
