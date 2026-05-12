@@ -119,10 +119,27 @@ If you find yourself about to write a narrative sentence between tool calls, sto
   - label `venv` — description `Environnement virtuel standard (via uv). Lockfile uv.lock, dev deps sous [dependency-groups]`
   - label `poetry` — description `Lockfile poetry.lock, dev deps sous [tool.poetry.group.dev.dependencies]`
 
-After the runner is determined (auto-detected or user-chosen), verify the tool is on PATH:
+After the runner is determined (auto-detected or user-chosen), verify the tool is on PATH — and install it automatically if missing:
 
-- `venv` → run `uv --version 2>&1`. If it fails → output `proj-init aborted: uv requis pour le mode venv. Install: https://docs.astral.sh/uv/getting-started/installation/` stop.
-- `poetry` → run `poetry --version 2>&1`. If it fails → output `proj-init aborted: poetry requis. Install: https://python-poetry.org/docs/#installation` stop.
+- `venv` → run `uv --version 2>&1`. If it fails:
+  1. Output: `uv non trouvé — installation en cours...`
+  2. Run (tries curl first, falls back to PowerShell on Windows):
+     ```
+     curl -LsSf https://astral.sh/uv/install.sh | sh 2>&1 || powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex" 2>&1
+     ```
+  3. Re-run `uv --version 2>&1`.
+     - Success → output `uv installé avec succès.` and continue.
+     - Still fails → output `proj-init aborted: impossible d'installer uv automatiquement. Install manuel : https://docs.astral.sh/uv/getting-started/installation/` stop.
+
+- `poetry` → run `poetry --version 2>&1`. If it fails:
+  1. Output: `poetry non trouvé — installation en cours...`
+  2. Run:
+     ```
+     curl -sSL https://install.python-poetry.org | python3 - 2>&1
+     ```
+  3. Re-run `poetry --version 2>&1`.
+     - Success → output `poetry installé avec succès.` and continue.
+     - Still fails → output `proj-init aborted: impossible d'installer poetry automatiquement. Install manuel : https://python-poetry.org/docs/#installation` stop.
 
 ### Step 1 — Persist runner choice
 
