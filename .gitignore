@@ -1,5 +1,6 @@
-# Claude Code local settings
-.claude/
+# Claude Code: commit shared settings, ignore personal overrides
+.claude/*
+!.claude/settings.json
 
 # Python
 __pycache__/
