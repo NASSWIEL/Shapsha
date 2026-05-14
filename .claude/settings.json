@@ -7,6 +7,9 @@
       "Edit",
       "MultiEdit",
       "Write",
+      "Grep",
+      "Glob",
+      "Task",
 
       "Bash(git status:*)",
       "Bash(git diff:*)",
@@ -49,13 +52,17 @@
       "Bash(cp:*)",
       "Bash(mv:*)",
       "Bash(rm -f .git/COMMIT_EDITMSG)",
+      "Bash(pwd)",
+      "Bash(basename:*)",
+      "Bash(diff:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(xargs:*)",
+      "Bash(git mv:*)",
 
       "Bash(uv:*)",
       "Bash(poetry:*)",
       "Bash(python:*)",
-
-      "Glob",
-      "Task",
 
       "WebFetch",
       "WebSearch"
