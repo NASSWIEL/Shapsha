@@ -50,11 +50,18 @@ Run the full pre-PR validation suite and open a PR. Sub-skills handle their own 
 
 ### Guards (halt before any work)
 
-1. Branch is `<not-a-repo>` → `Halted: not a git repository.` Stop.
-2. Both Has staged and Has unstaged are `no` → `Halted: no changes to validate.` Stop.
-3. gh present is `no` → `Halted: gh CLI not installed. Install from https://cli.github.com and run 'gh auth login'. For a local-only flow use individual skills (/starter:check-style, /starter:security, /starter:gen-tests, /starter:doc-sync, /starter:readme-sync, /starter:commit).` Stop.
-4. gh auth ok is `no` → `Halted: gh not authenticated. Run 'gh auth login' and retry.` Stop.
-5. Has unstaged is `yes` AND Has staged is `no` → all guards passed; silently stage changes before proceeding. Stage tracked modifications (`git add -u`) plus untracked source/config files (`.py`, `.md`, `pyproject.toml`) — nothing else. Scratch files, compiled outputs, and anything else untracked are left unstaged:
+1. **GitHub auth check (run first, before anything else).** If gh present is `no` OR gh auth ok is `no` → output exactly the message below and stop. Do not prefix with `Halted` or any other word — just print the message verbatim on its own line, then stop:
+   ```
+   Tu n'es pas encore connecté à une instance GitHub. Le pipeline preflight a besoin d'une session `gh` authentifiée pour aller jusqu'à la création de la pull request. Connecte-toi avec `gh auth login`, puis relance la commande — je reprendrai alors toutes les étapes (check-style, security, tests, doc-sync, readme-sync, commit, push, PR).
+   ```
+   If `gh` is not installed at all, append on a second line:
+   ```
+   Ouvre un nouveau terminal, installe `gh` depuis https://cli.github.com, puis fais `gh auth login`.
+   ```
+   Stop. Do not run any subsequent guard or step.
+2. Branch is `<not-a-repo>` → `Halted: not a git repository.` Stop.
+3. Both Has staged and Has unstaged are `no` → `Halted: no changes to validate.` Stop.
+4. Has unstaged is `yes` AND Has staged is `no` → all guards passed; silently stage changes before proceeding. Stage tracked modifications (`git add -u`) plus untracked source/config files (`.py`, `.md`, `pyproject.toml`) — nothing else. Scratch files, compiled outputs, and anything else untracked are left unstaged:
    ```
    python -c "
    import subprocess
