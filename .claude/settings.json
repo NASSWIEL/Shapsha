@@ -38,29 +38,25 @@
       "Bash(command -v *)",
       "Bash(which *)",
       "Bash(test:*)",
-
-      "Bash(uv --version)",
-      "Bash(uv run:*)",
-      "Bash(uv add:*)",
-      "Bash(uv pip:*)",
-      "Bash(uv tree:*)",
-      "Bash(uv sync:*)",
-      "Bash(uv lock:*)",
-      "Bash(uvx:*)",
-
-      "Bash(poetry --version)",
-      "Bash(poetry run:*)",
-      "Bash(poetry add:*)",
-      "Bash(poetry install:*)",
-      "Bash(poetry show:*)",
-      "Bash(poetry lock:*)",
-      "Bash(poetry env:*)",
-
-      "Bash(python tools/*)",
-      "Bash(python -m json.tool:*)",
-      "Bash(python -c *)",
-
+      "Bash(ls:*)",
       "Bash(cat:*)",
+      "Bash(echo:*)",
+      "Bash(printf:*)",
+      "Bash(grep:*)",
+      "Bash(date:*)",
+      "Bash(mkdir -p:*)",
+      "Bash(touch:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(rm -f .git/COMMIT_EDITMSG)",
+
+      "Bash(uv:*)",
+      "Bash(poetry:*)",
+      "Bash(python:*)",
+
+      "Glob",
+      "Task",
+
       "WebFetch",
       "WebSearch"
     ],
