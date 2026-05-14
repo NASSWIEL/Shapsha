@@ -115,7 +115,10 @@
       "Read(**/*.pem)",
       "Read(**/*.key)",
 
-
+      "Bash(curl * | sh)",
+      "Bash(curl * | bash)",
+      "Bash(wget * | sh)",
+      "Bash(wget * | bash)"
     ],
     "deny": [
       "Bash(sudo:*)",
@@ -129,11 +132,7 @@
       "Bash(chown -R:*)",
       "Bash(mkfs:*)",
       "Bash(dd if=*)",
-      "Bash(:(){ :|:& };:)",
-      "Bash(curl * | sh)",
-      "Bash(curl * | bash)",
-      "Bash(wget * | sh)",
-      "Bash(wget * | bash)"
+      "Bash(:(){ :|:& };:)"
     ]
   }
 }
