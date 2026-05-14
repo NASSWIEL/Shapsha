@@ -4,6 +4,9 @@
     "allow": [
       "Skill",
       "Read",
+      "Edit",
+      "MultiEdit",
+      "Write",
 
       "Bash(git status:*)",
       "Bash(git diff:*)",
